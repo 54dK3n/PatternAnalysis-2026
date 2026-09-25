@@ -10,7 +10,7 @@ This is the working repository. Final coursework submission still requires the p
 
 - `adni_splits.py`: source-data audit, patient-level partitioning, and independent manifest verification.
 - `tests/test_adni_splits.py`: 17 integration tests using synthetic patients and generated images.
-- `DATA_PROTOCOL.md`: the full experimental protocol, including training-time safeguards, in Chinese.
+- `DATA_PROTOCOL.md`: the full experimental protocol, including training-time safeguards.
 - `requirements.txt`: the image-reading dependency.
 
 ## Setup
@@ -18,6 +18,8 @@ This is the working repository. Final coursework submission still requires the p
 Use Python 3.9 or newer in your project environment:
 
 ```bash
+git clone https://github.com/54dK3n/comp3710-adni.git
+cd comp3710-adni
 python3 -m pip install -r requirements.txt
 ```
 
@@ -53,7 +55,7 @@ python3 adni_splits.py verify \
   --output "$HOME/comp3710/adni_splits_v1"
 ```
 
-`prepare` refuses to overwrite an existing split or write into the source dataset. If the split already exists, use `verify`; a comment-only code update does not require a new split.
+`prepare` refuses to overwrite an existing split or write into the source dataset. If the split already exists, use `verify`; documentation and message translations do not require a new split.
 
 The fixed default allocation is 70% development, 10% calibration, and 20% final test, measured by patients. Development patients are assigned to five folds. Each fold has separate `train.csv`, `early_stop.csv`, and `val.csv` files. The early-stopping subset contains approximately 10% of the four non-validation folds. Calibration and final-test patients never enter cross-validation.
 

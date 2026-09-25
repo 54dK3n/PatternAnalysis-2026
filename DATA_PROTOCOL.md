@@ -1,128 +1,137 @@
-# ADNI 数据划分与防泄漏协议
+# ADNI Data Splitting and Leakage Prevention Protocol
 
-我们希望检验的是：**电脑学习了一批人的 MRI 后，能否正确判断从未见过的其他人。** 因此，同一个人的所有扫描和图片都必须放在同一组。不能把这个人的某些图片用来学习，另一些图片用来考试。
+The research question is whether a model trained on MRI scans from one group of patients can classify scans from **previously unseen patients**. All scans and slices from the same patient must therefore remain in the same partition. A patient's images cannot appear on both sides of a training/evaluation boundary.
 
-**交叉验证就是在开发数据中轮流换一组人进行检验，共做五次。** 它可以让我们了解结果是否稳定，但前提仍然是按患者分组。最后还要保留一批完全没有参与开发的人，进行最终测试。
+**Five-fold cross-validation rotates the held-out group of development patients across five runs.** It measures variation across patient groups while preserving patient separation. A separate group of patients is reserved for the final evaluation and does not participate in model development.
 
-本项目采用以下方案。比例是项目选择，不是课程规定；人数按目前报告的 680 名患者估算，实际分层舍入结果以脚本输出为准。
+The following proportions are project choices, not course requirements. The patient counts below come from the user's reported successful server run on 680 patients.
 
-| 分组 | 占全部患者的比例 | 预计人数 | 允许用途 |
+| Partition | Proportion of all patients | Reported patients | Permitted use |
 |---|---:|---:|---|
-| 开发集 `development` | 70% | 476 | 五折交叉验证、选择方法和参数、训练最终模型 |
-| 校准集 `calibration` | 10% | 68 | 最终模型固定后，调整置信度和决策阈值 |
-| 最终测试集 `test` | 20% | 136 | 所有决定固定后，评价最终效果 |
+| `development` | 70% | 476 | Five-fold cross-validation, method and hyperparameter selection, and final model training |
+| `calibration` | 10% | 68 | Confidence calibration and decision thresholds after the image classifier is fixed |
+| `test` | 20% | 136 | Final evaluation after all decisions are fixed |
 
-**校准集可以理解为“检查电脑的自信程度是否可信”的一小组题。** 它不用于训练图片识别能力，也不用于挑选模型。测试集则是最后一次正式考试，不能根据考试结果返回修改方案再把同一成绩当作独立测试。
+The calibration partition assesses and adjusts confidence under a predefined procedure. It is not used to train the image classifier or select its architecture. The test partition provides the final evaluation: its results must not be used to revise the method and then present a new result on the same patients as an independent evaluation.
 
-## 已知数据与本次修正
+## Reported Dataset and Corrected Split
 
-以下是用户在课程服务器运行检查后提供的结果。用户随后执行了本仓库的 `prepare` 和 `verify`，并提供了 `PASS` 输出；本地没有直接访问真实服务器数据：
+The following information was supplied by the user after running checks on the course server. The user subsequently ran this repository's `prepare` and `verify` commands and supplied a `PASS` result. The real server dataset has not been accessed directly from the local development environment.
 
-- 680 名患者，1,526 个影像编号，30,520 张灰度 JPEG。
-- 每个影像编号对应 20 张切片，图片尺寸均为 256 × 240 像素。
-- 原目录的训练集与测试集有 216 名患者重叠，虽然影像编号不重叠。
-- 图片前缀是影像编号；患者编号从元数据的 `raw` 路径提取，例如 `037_S_4001`。
+- 680 patients, 1,526 image IDs, and 30,520 grayscale JPEG images.
+- Each image ID identifies one scan with 20 slices; every image is 256 × 240 pixels.
+- The original training and test directories share 216 patients, although their image IDs do not overlap.
+- The image filename prefix is an image ID. The patient ID is extracted from the metadata's `raw` path and has the general form `NNN_S_NNNN`.
 
-用户报告的新划分为：开发集 476 人／1,050 个影像／21,000 张图片，校准集 68 人／170 个影像／3,400 张图片，最终测试集 136 人／306 个影像／6,120 张图片。患者、影像、路径和精确重复的分组边界，以及每折覆盖检查均通过。此记录来自用户提供的终端输出；完整服务器 `report.json` 未复制到本地仓库。
+The user reported the following new partitions:
 
-因此，原来的 `AD_NC/train` 和 `AD_NC/test` **只作为源图片所在路径**。合并建立索引后，按患者生成新的用途清单，不继承原目录的训练／测试身份，也不移动、重命名或修改源图片。
+| Partition | Patients | Scans | Images |
+|---|---:|---:|---:|
+| Development | 476 | 1,050 | 21,000 |
+| Calibration | 68 | 170 | 3,400 |
+| Final test | 136 | 306 | 6,120 |
+| Total | 680 | 1,526 | 30,520 |
 
-任务定义是对新患者的扫描进行 AD／NC 分类。它不等同于预测一个人未来是否发病，也不代表已经验证跨医院泛化能力。
+The reported checks passed for patient, scan, path, and exact-duplicate separation, together with fold coverage. This record is based on terminal output supplied by the user; the complete server-generated `report.json` has not been copied into the local repository.
 
-## 患者和标签规则
+The original `AD_NC/train` and `AD_NC/test` directories are therefore treated **only as source image locations**. Their contents are indexed together, and new manifests assign roles by patient. The original training/test designation is not inherited. Source images are not moved, renamed, or modified.
 
-1. 一个患者只能属于 `development`、`calibration`、`test` 中的一组。
-2. 同患者所有影像、每个影像的全部 20 张切片，都跟随患者分组。
-3. 开发集分成五个外层折；同患者在五折中恰好担任一次外层验证，不能在同一折的训练与验证中同时出现。
-4. 患者分层使用 `AD_only`、`NC_only`、`mixed` 三种情况。`mixed` 表示不同扫描存在不同诊断，不给这个人强行指定统一疾病标签。
-5. 每次扫描保留自己的真实标签。程序使用 `AD=1`、`NC=0`，同时校验源元数据对应 `AD=2`、`NC=0`。这两套编码不得混淆。
-6. 尽量平衡各组的患者类别分布，但患者隔离优先。稀少分层不能保证每折都有；报告实际患者数、扫描数、切片数和类别数，不以图片数代替患者数。
-7. 固定随机种子 `3710`。不能运行多个种子后按模型成绩挑一份划分，也不能为满足目标分数重新抽取最终测试集。
+The task is AD/NC classification of scans from unseen patients. It is not a prediction of whether a patient will develop the disease in the future, and it does not establish generalization to other hospitals.
 
-脚本采用自定义的患者级分层分配：留出组按各分层患者数的比例分配名额并处理舍入；开发集各折优先平衡每个分层的患者数，再兼顾总患者数。它遵循分组交叉验证原则，但不是调用 scikit-learn 的 `StratifiedGroupKFold`，也不按切片数加权分层。
+## Patient and Label Rules
 
-分组交叉验证的原则是，让验证样本所属的组在对应训练数据中从未出现；这里的“组”就是患者。[scikit-learn 官方分组交叉验证说明](https://scikit-learn.org/stable/modules/cross_validation.html)
+1. Each patient belongs to exactly one of `development`, `calibration`, or `test`.
+2. All scans from a patient, and all 20 slices from each scan, follow that patient's assignment.
+3. Development patients are assigned to five outer folds. Each patient appears in outer validation exactly once and cannot appear in both training and validation within the same fold.
+4. Patient stratification uses `AD_only`, `NC_only`, and `mixed` histories. `mixed` means the patient's scans have different diagnoses; a single disease label is not imposed on that patient.
+5. Each scan retains its own label. The program uses `AD=1` and `NC=0` while checking the source metadata's `AD=2` and `NC=0` encoding. These two encodings must not be confused.
+6. Patient class distributions are balanced where possible, but patient separation takes priority. Rare strata cannot be guaranteed to appear in every fold. Report actual patient, scan, slice, and class counts; image counts are not a substitute for patient counts.
+7. The random seed is fixed at `3710`. Do not try multiple seeds and select a split based on model performance, or resample the final test set to reach a target score.
 
-## 五折交叉验证具体怎么运行
+The script implements a custom stratified assignment at the patient level. Holdout allocations are proportional to patient counts within strata, with rounding handled explicitly. Development fold assignment prioritizes balancing each stratum's patient counts and then total patient counts. It follows grouped cross-validation principles but does not call scikit-learn's `StratifiedGroupKFold`, and it does not weight stratification by slice count.
 
-只在开发集内部操作，校准集和最终测试集不参加任何一折。
+In grouped cross-validation, the groups represented in validation must be absent from the corresponding training data. Here, each group is a patient. See the [scikit-learn cross-validation guide](https://scikit-learn.org/stable/modules/cross_validation.html).
 
-每次取开发集的一个折作为外层验证集 `val`；从剩余四折的患者中，再留约 10% 作为 `early_stop`，其余作为 `train`：
+## Five-Fold Cross-Validation Procedure
+
+Cross-validation operates only within `development`. Neither calibration nor final test patients participate in any fold.
+
+For each run, one development fold becomes outer validation (`val`). Approximately 10% of patients in the remaining four folds are assigned to `early_stop`; the rest are assigned to `train`:
 
 ```text
-全部患者
-├── development：70%
-│   ├── 每次约 1/5 → val：评价本折模型
-│   └── 其余约 4/5
-│       ├── 约 90% → train：更新模型参数
-│       └── 约 10% → early_stop：决定何时停止训练
-├── calibration：10%，最终模型固定后才使用
-└── test：20%，所有决定固定后才使用
+All patients
+├── development: 70%
+│   ├── Approximately 1/5 per run → val: evaluate this fold's model
+│   └── Remaining approximately 4/5
+│       ├── Approximately 90% → train: update model parameters
+│       └── Approximately 10% → early_stop: select the stopping epoch
+├── calibration: 10%, used only after the final image classifier is fixed
+└── test: 20%, used only after all decisions are fixed
 ```
 
-这里 `early_stop` 的 10% 是**剩余四折患者的 10%**，不是全部 680 人的 10%。
+The 10% allocated to `early_stop` refers to **10% of patients in the remaining four folds**, not 10% of all 680 patients.
 
-| 数据 | 更新模型参数 | 拟合数据统计量 | 选择停止轮次 | 评价外层折 |
+| Data | Update classifier parameters | Fit data statistics | Select stopping epoch | Evaluate outer fold |
 |---|---|---|---|---|
-| 本折 `train` | 是 | 是 | 不直接作为验证依据 | 否 |
-| 本折 `early_stop` | 否 | 否 | 是 | 否 |
-| 本折 `val` | 否 | 否 | 否 | 是 |
-| `calibration`、`test` | 否 | 否 | 否 | 否 |
+| Current fold's `train` | Yes | Yes | Not as the held-out stopping criterion | No |
+| Current fold's `early_stop` | No | No | Yes | No |
+| Current fold's `val` | No | No | No | Yes |
+| `calibration` and `test` | No | No | No | No |
 
-每折必须从头初始化模型、优化器、学习率调度器、早停记录和其他训练状态。若使用经许可的预训练权重，各折可以从同一份外部预训练权重开始，但不能接着上一折的模型训练。
+Each fold must initialize its model, optimizer, learning-rate scheduler, early-stopping history, and other training state independently. If permitted external pretrained weights are used, every fold may start from the same external weights. Training must not continue from the previous fold's fitted model.
 
-外层 `val` 不用于早停或挑选本折 checkpoint。五折结果可以用于比较预先列出的模型配置；因为它参与方案选择，这些结果应称为“开发集交叉验证结果”，不冒充完全独立的最终测试成绩。真正的独立评价来自锁定的 `test`。
+Outer `val` is not used for early stopping or checkpoint selection within a fold. Five-fold results may be used to compare model configurations specified in advance. Because they inform method selection, they must be described as **development cross-validation results**, not as a fully independent final test. The locked `test` partition supplies the independent evaluation.
 
-简单基线、ConvNeXt 以及各消融实验使用同一套清单、同一套评价方式。开发阶段报告五折各自结果及均值、标准差，而不只挑最高的一折。
+The simple baseline, ConvNeXt, and ablation experiments use the same manifests and evaluation procedure. Report every fold's result, together with the mean and standard deviation, rather than selecting only the best fold.
 
-## 训练中的其他防泄漏规则
+## Additional Training Rules
 
-- 所有按数据学习的均值、标准差、特征变换、类别权重、采样规则，只能从**当前折的 `train`** 拟合；同一参数再应用到 `early_stop` 和 `val`。不得先用全数据计算统计量再分折。
-- 若采用固定的外部预训练常数，或者每张图独立执行的确定性变换，应明确记录其来源和做法，不能把这种情况与全数据统计混为一谈。
-- 数据增强在完成患者划分之后执行，只用于训练。不能先生成增强图片，再把原图和增强图分别分到不同用途。
-- 平衡类别、重复采样等操作只影响训练数据；不对验证、校准、测试数据进行过采样后报告自然分布的成绩。
-- 验证、校准和测试时关闭训练模式，不能更新 BatchNorm 等状态。预处理、切片聚合和输入尺寸规则先在开发阶段确定。
-- 文件名、患者编号、目录中的 `AD`／`NC`、JSON 标签仅用于索引和监督，不作为模型输入特征。
-- 缓存、特征文件和 checkpoint 要包含折编号及数据清单版本，防止误读其他折或旧实验状态。
+- Fit all data-dependent means, standard deviations, feature transformations, class weights, and sampling rules using **only the current fold's `train` data**. Apply the fitted preprocessing unchanged to `early_stop` and `val`. Do not compute full-dataset statistics before splitting.
+- Fixed constants from external pretraining and deterministic transformations applied independently to each image must have their sources and procedures documented. Distinguish them from statistics estimated across the dataset.
+- Apply augmentation only after patient assignment and only during training. Do not generate augmented images first and then distribute an original image and its augmented versions across different roles.
+- Class balancing and repeated sampling affect training data only. Do not oversample validation, calibration, or test data and report the resulting scores as performance on the natural distribution.
+- Use evaluation mode for validation, calibration, and testing. Do not update BatchNorm or other training state. Determine preprocessing, slice aggregation, and input-size rules during development.
+- Filenames, patient IDs, `AD`/`NC` directory names, and JSON labels are used for indexing and supervision only; they are not model input features.
+- Identify caches, feature files, and checkpoints by fold and manifest version to prevent reuse of another fold's data or an earlier experiment's state.
 
-官方防泄漏指南特别强调：需要拟合的预处理步骤只能学习训练数据；验证和测试只应用已学到的变换。[scikit-learn 官方常见错误说明](https://scikit-learn.org/stable/common_pitfalls.html)
+Preprocessing steps that require fitting must learn only from training data; validation and test data receive the already fitted transformations. See the [scikit-learn guide to common pitfalls](https://scikit-learn.org/stable/common_pitfalls.html).
 
-## 最终模型、校准和正式测试的顺序
+## Final Training, Calibration, and Testing
 
-1. **完成五折开发。** 选定模型结构、参数、输入处理、训练轮数规则以及切片聚合方式。最终训练轮数可取所选配置五折早停轮数的中位数；规则需提前记录，不根据校准或测试成绩调整。
-2. **重新训练一个最终模型。** 从新的初始化或约定的外部预训练权重开始，使用全部 `development`，训练固定轮数。最终数据统计量只由 `development` 计算。此阶段不使用 `calibration` 早停。
-3. **冻结图片分类模型。** 保存权重和配置。再在 `calibration` 上按已确定的方案拟合温度参数，设置分类阈值和“转人工复核”阈值。校准目标、参数形式、阈值目标及目标无法达到时的处理方式，应在查看校准结果前规定。
-4. **冻结完整决策流程。** 固定模型、预处理、校准参数、切片聚合规则和所有阈值，并保存版本信息。
-5. **评价最终测试集。** 对所有预先指定的最终比较方案一起评价；报告完整结果、资源成本和失败案例。最终测试结果不能用来选择模型或调整阈值。
+1. **Complete five-fold development.** Choose the model architecture, hyperparameters, input processing, training-duration rule, and slice aggregation method. The final epoch count may be the median early-stopping epoch of the selected configuration's five folds. Record this rule in advance; do not adjust it based on calibration or test performance.
+2. **Train a new final model.** Start from a fresh initialization or the agreed external pretrained weights, and train on all of `development` for the fixed number of epochs. Estimate final data statistics from `development` only. Do not use `calibration` for early stopping.
+3. **Freeze the image classifier.** Save its weights and configuration. Then use `calibration`, under the predetermined procedure, to fit temperature scaling and set the classification and manual-review thresholds. Specify the calibration objective, parameterization, threshold targets, and fallback if a target cannot be reached before examining calibration results.
+4. **Freeze the complete decision procedure.** Fix the model, preprocessing, calibration parameters, slice aggregation, and every threshold. Save version information.
+5. **Evaluate the final test set.** Evaluate all prespecified final comparisons together. Report complete results, resource costs, and failure cases. Do not use final test results to select a model or adjust thresholds.
 
-必须避免的情况：
+The following practices are prohibited under this protocol:
 
-- 看校准集效果后改变网络、训练轮数、数据增强或输入处理。这样校准集就成为了额外开发集，不再符合本协议的独立校准用途。
-- 校准完成后把校准患者加回训练，再继续沿用旧的校准器和阈值。模型一旦改变，原校准关系不再是同一流程。
-- 用最终测试集调温度、选分类阈值、挑“最安全”的人工复核比例，或者选择表现最好的一次训练。
-- 根据测试结果修改模型后，把同一测试集的新成绩继续描述为首次独立评价。出现实质修正应披露测试已被查看，并重新审视是否还有独立评价数据。
+- Changing the network, training duration, augmentation, or input processing in response to calibration performance. This would make calibration an additional development set rather than an independent calibration partition.
+- Adding calibration patients to classifier training after calibration and continuing to use the old calibrator and thresholds. Changing the classifier changes the procedure that was calibrated.
+- Using the final test set to fit temperature scaling, choose classification thresholds, select the apparently safest manual-review rate, or choose the best training run.
+- Revising the model after viewing test results and describing another score on the same test set as a first independent evaluation. Any material revision requires disclosure that the test results were already inspected and reconsideration of whether independent evaluation data remain available.
 
-校准集上的表现是拟合校准参数时的开发信息，不是最终准确性证明。约 68 名患者也不意味着阈值足够稳定；须报告不确定性。阈值优化与分类器训练应使用分开的数据。[scikit-learn 官方阈值调优说明](https://scikit-learn.org/stable/modules/classification_threshold.html)
+Performance on calibration data is information used to fit the calibration procedure, not final evidence of accuracy. A calibration set of 68 patients does not establish threshold stability; report uncertainty. Threshold optimization and classifier fitting should use separate data. See the [scikit-learn guide to decision-threshold tuning](https://scikit-learn.org/stable/modules/classification_threshold.html).
 
-本协议默认使用**一个最终模型**，避免把单折置信度校准直接套在五模型平均输出上。若以后改成集成模型，需要在开发阶段先确定集成方式，完成集成后再用独立校准集校准整个集成。
+This protocol uses **one final model** by default. Calibration from a single fold must not be applied directly to averaged predictions from five models. If an ensemble is introduced later, choose its construction during development, complete the ensemble, and then calibrate the entire ensemble using the independent calibration partition.
 
-## OOF 预测与结果统计
+## Out-of-Fold Predictions and Statistical Reporting
 
-OOF 指每名开发患者由其外层验证折对应的模型生成预测；该模型没有用这名患者训练或早停。每个配置下，每名开发患者只保留这一次外层预测。
+An out-of-fold (OOF) prediction for a development patient is produced by the model corresponding to that patient's outer validation fold. That model used neither training nor early-stopping data from the patient. Retain only this outer-fold prediction for each development patient under each configuration.
 
-**不能让五个折模型对整个开发集预测，再平均后称为 OOF。** 对某位患者而言，其中若干模型已经用过他的数据，平均结果不满足未见患者评价的要求。本协议使用独立校准集，OOF 不承担最终校准任务。
+**Do not predict the entire development set with all five fold models, average their outputs, and call the result OOF.** Some of those models have already used the patient's data, so the average does not represent evaluation on an unseen patient. This protocol uses an independent calibration partition; OOF predictions are not used for final calibration.
 
-20 张切片来自同一次扫描，不能视为 20 个独立患者。开发阶段预先规定切片聚合成扫描预测的方式；主要报告扫描级结果，同时可附切片级结果。若计算置信区间，应按患者重采样，保留其所有相关扫描，不能把 30,520 张切片当成互相独立的样本。
+The 20 slices from one scan are not 20 independent patients. Specify the method for aggregating slice predictions into a scan prediction during development. Report scan-level results as the primary results, with optional slice-level results. If confidence intervals are computed, resample by patient and retain all scans associated with each sampled patient. Do not treat all 30,520 slices as independent observations.
 
-同一患者可能有不同随访诊断，不能简单平均所有随访预测后配一个随意选择的患者标签。若另做患者级指标，必须预先规定可解释的选取规则。
+A patient may have different diagnoses at different visits. Do not average all follow-up predictions and assign an arbitrary patient label. Any additional patient-level metric requires an interpretable selection rule specified in advance.
 
-## 生成清单和独立检查
+## Manifest Generation and Independent Verification
 
-工具是项目中的 `adni_splits.py`，需要 Python 3.9 或更新版本及 Pillow。当前工具负责**数据索引、划分与完整性审计**；模型训练、校准及阈值冻结尚未实现，因此上述训练规则目前是必须执行的协议，不能声称已经由训练代码自动保证。
+The tool is `adni_splits.py`, which requires Python 3.9 or newer and Pillow. It currently implements **data indexing, splitting, and integrity auditing**. Model training, calibration, and threshold freezing are not yet implemented. The training rules above are mandatory protocol requirements, not guarantees already enforced by training code.
 
-本次仅索引四个源目录中扩展名为 `.jpg`／`.jpeg` 的图片，并核实它们的实际格式为 JPEG。其他文件不进入实验清单，在 `report.json` 的 `source_audit.ignored_non_jpeg_files` 中列出；如果其中存在本应参与实验的图片，需要先查清原因，不能把“被忽略”当作已通过图片审计。
+The tool indexes only files with `.jpg` or `.jpeg` extensions in the four source directories and verifies that their actual format is JPEG. Other files are excluded from the experiment manifests and listed under `source_audit.ignored_non_jpeg_files` in `report.json`. If an excluded file is an image that should be part of the experiment, investigate it first; exclusion does not mean the image passed the audit.
 
-把脚本上传到服务器后，在脚本所在目录运行。输出放在自己的目录，源数据保持只读：
+After copying the script to the server, run it from the directory containing the script. Store outputs in your own directory and keep source data read-only:
 
 ```bash
 python3 adni_splits.py prepare \
@@ -132,7 +141,7 @@ python3 adni_splits.py prepare \
   --seed 3710
 ```
 
-以上使用默认 70% 开发、10% 校准、20% 测试，以及每折内部 10% 早停留出。成功后还要运行独立检查命令：
+This uses the default 70% development, 10% calibration, and 20% test allocation, with a 10% early-stopping holdout within each fold's training-side patients. After successful preparation, run the independent verification command:
 
 ```bash
 python3 adni_splits.py verify \
@@ -140,37 +149,37 @@ python3 adni_splits.py verify \
   --output "$HOME/comp3710/adni_splits_v1"
 ```
 
-输出内容：
+Generated artifacts:
 
-| 文件 | 用途 |
+| File | Purpose |
 |---|---|
-| `all.csv` | 全部纳入图片的索引 |
-| `patients.csv` | 患者分组及分层信息 |
-| `development.csv` | 最终模型可以训练的开发数据 |
-| `calibration.csv` | 最终模型的独立校准数据 |
-| `test.csv` | 锁定的最终测试数据 |
-| `fold_01/train.csv` 至 `fold_05/train.csv` | 每折实际更新模型参数的数据 |
-| `fold_01/early_stop.csv` 至 `fold_05/early_stop.csv` | 每折选停止轮次的数据 |
-| `fold_01/val.csv` 至 `fold_05/val.csv` | 每折外层验证数据 |
-| `report.json` | 数量、重叠、重复及完整性检查结果 |
-| `COMPLETED.json` | 成功生成标记及完整性信息 |
+| `all.csv` | Index of all included images |
+| `patients.csv` | Patient partitions and strata |
+| `development.csv` | Development data available for final model training |
+| `calibration.csv` | Independent calibration data for the final model |
+| `test.csv` | Locked final test data |
+| `fold_01/train.csv` through `fold_05/train.csv` | Data used to update model parameters in each fold |
+| `fold_01/early_stop.csv` through `fold_05/early_stop.csv` | Data used to select the stopping epoch in each fold |
+| `fold_01/val.csv` through `fold_05/val.csv` | Outer validation data in each fold |
+| `report.json` | Counts, overlap checks, duplicate checks, and integrity results |
+| `COMPLETED.json` | Successful-generation marker and integrity information |
 
-`verify` 从实际源图片和元数据重新核对清单及 SHA 摘要，检查数据和清单是否发生改变。仅存在 CSV 文件或成功标记，不能代替本次独立核验。开始正式实验前，以及数据或清单发生变化后，都应重新核验并记录结果。
+`verify` checks manifests and SHA digests against the actual source images and metadata, detecting changes to the data or manifests. The presence of CSV files or a completion marker does not replace this independent verification. Verify and record the result before formal experiments and after any change to the data or manifests.
 
-## 审计失败条件与验证边界
+## Audit Failures and Verification Limits
 
-以下情况必须停止生成可用划分，查清原因后处理：
+The following conditions must stop the creation of a usable split until their causes have been investigated and resolved:
 
-- 元数据缺失或无法解析患者／影像编号，目录标签与元数据标签不一致。
-- 同一影像编号对应多个患者，同一影像／切片编号重复，影像的切片数量不符合预期。
-- 图片损坏或无法完整读取，清单包含缺失文件、重复行、遗漏或额外样本。
-- 任意同折 `train`、`early_stop`、`val` 之间，或它们与校准／最终测试之间存在患者、影像或相同内容的跨界重叠。
-- 不同患者出现解码后完全相同的图片。先报错审查，不自动把这种情况当作无害；空白图片也可能导致相同内容，应按预先规定的质量规则处理。
-- 相同图像内容出现不同标签，即使属于同一患者也应报错。
-- 验证时发现纳入清单的源 JPEG、元数据或清单摘要与记录不一致。
+- Missing metadata, unparseable patient/image IDs, or disagreement between directory labels and metadata labels.
+- An image ID associated with multiple patients, a repeated image/slice identity, or an unexpected slice count for a scan.
+- Corrupt or incompletely readable images, or manifests with missing files, duplicate rows, omissions, or extra samples.
+- Patient, scan, or identical-content overlap between `train`, `early_stop`, and `val` within a fold, or between those roles and calibration/final test data.
+- Exactly identical decoded images assigned to different patients. These require review rather than an automatic assumption that they are harmless. Blank images can also produce identical content and should be handled under predefined quality rules.
+- Identical image content associated with different labels, even for the same patient.
+- A verification mismatch involving the included source JPEGs, metadata, or recorded manifest digests.
 
-同患者、同标签的相同图片可以保留并报告：患者分组能够防止它们跨用途出现，但重复仍可能影响样本权重。是否去重应在模型开发前按统一规则确定并记录。
+Identical images with the same patient and label may be retained and reported. Patient grouping prevents them from crossing role boundaries, but duplicates can still affect sample weights. Any deduplication decision must follow a uniform rule established and documented before model development.
 
-文件摘要和解码像素摘要可以帮助发现改名后的完全重复图片，**不能证明不存在近似重复**。本工具也无法独立证明患者编号没有录入错误，或课程上游预处理没有使用全数据拟合统计量。应向数据提供方核实上游处理；无法确认的部分明确写入报告限制。
+File and decoded-pixel digests can identify exact duplicates even after renaming, but **cannot establish the absence of approximate duplicates**. The tool also cannot independently establish that patient IDs are correct or that upstream course preprocessing did not fit statistics using all patients. Confirm upstream processing with the data provider and describe any unverified aspects as limitations in the report.
 
-本协议的目标是建立可检查、可复现的防泄漏边界。真实服务器运行完成并审阅报告之前，不能声称数据已通过全部检查；通过数据审计也不代表尚未实现的训练流程已经通过检查。
+The purpose of this protocol is to establish leakage-prevention boundaries that can be inspected and reproduced. A split should only be described as having passed the implemented data checks after the real server run and review of its results. The user has reported a successful run for the current split, as documented above; this does not establish that the not-yet-implemented training workflow has passed its own checks.
