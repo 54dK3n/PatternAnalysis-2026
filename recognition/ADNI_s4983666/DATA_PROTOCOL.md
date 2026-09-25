@@ -32,7 +32,7 @@ The user reported the following new partitions:
 | Final test | 136 | 306 | 6,120 |
 | Total | 680 | 1,526 | 30,520 |
 
-The reported checks passed for patient, scan, path, and exact-duplicate separation, together with fold coverage. This record is based on terminal output supplied by the user; the complete server-generated `report.json` has not been copied into the local repository.
+The server-side checks passed for patient, scan, path, and exact-duplicate separation, together with fold coverage. The complete server-generated manifests and `report.json` were subsequently copied into the ignored local `outputs/adni_splits_v1/` folder. Local review verified their sealed checksums, reconstructed assignments, recorded identity/hash boundaries and correspondence with the first five-fold baseline predictions. It did not reread the original MRI pixels or source metadata, which remain on the server. These private local artifacts are excluded from version control.
 
 The original `AD_NC/train` and `AD_NC/test` directories are therefore treated **only as source image locations**. Their contents are indexed together, and new manifests assign roles by patient. The original training/test designation is not inherited. Source images are not moved, renamed, or modified.
 
@@ -182,4 +182,4 @@ Identical images with the same patient and label may be retained and reported. P
 
 File and decoded-pixel digests can identify exact duplicates even after renaming, but **cannot establish the absence of approximate duplicates**. The tool also cannot independently establish that patient IDs are correct or that upstream course preprocessing did not fit statistics using all patients. Confirm upstream processing with the data provider and describe any unverified aspects as limitations in the report.
 
-The purpose of this protocol is to establish leakage-prevention boundaries that can be inspected and reproduced. A split should only be described as having passed the implemented data checks after the real server run and review of its results. The user has reported a successful audit for the current split, as documented above. Baseline training has been checked on synthetic CPU fixtures; real-data training and the future final-calibration/test workflow require their own verification.
+The purpose of this protocol is to establish leakage-prevention boundaries that can be inspected and reproduced. A split should only be described as having passed the implemented data checks after the real server run and review of its results. The user has reported a successful audit for the current split, as documented above. Baseline execution has been checked on synthetic CPU fixtures, and the first five real-data runs have undergone local log, checkpoint, prediction and manifest review. Original-image and metadata verification remains server-side; the future final-calibration/test workflow has not yet been implemented or verified.

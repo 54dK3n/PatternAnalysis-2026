@@ -2,9 +2,9 @@
 
 Patient-isolated data preparation for a planned MRI classification project comparing Alzheimer's disease (AD) with normal controls (NC).
 
-The current implementation audits the course JPEG dataset, creates five-fold cross-validation manifests, trains a small CNN on one development fold, and reproduces its held-out predictions from a saved checkpoint. ConvNeXt comparison, final refitting, confidence calibration, and final-test evaluation remain future work. No real-data model accuracy has been measured yet.
+The current implementation audits the course JPEG dataset, creates five-fold cross-validation manifests, trains a small CNN on one development fold, and reproduces its held-out predictions from a saved checkpoint. The first five-fold CNN baseline has been completed on the course server and reviewed locally. ConvNeXt comparison, final refitting, confidence calibration, and final-test evaluation remain future work.
 
-This is the working repository. Final coursework submission still requires the prescribed pull request to the course repository and the accompanying report.
+This project lives at `recognition/ADNI_s4983666/` on the course fork's `topic-recognition` branch. The original three development commits were imported without squashing their history. Final coursework submission still requires a pull request to `shakes76/PatternAnalysis-2026`, targeting `topic-recognition`, and the accompanying report submission.
 
 ## Repository contents
 
@@ -25,10 +25,12 @@ This is the working repository. Final coursework submission still requires the p
 Use Python 3.9 or newer in your project environment:
 
 ```bash
-git clone https://github.com/54dK3n/comp3710-adni.git
-cd comp3710-adni
+git clone --branch topic-recognition https://github.com/54dK3n/PatternAnalysis-2026.git
+cd PatternAnalysis-2026/recognition/ADNI_s4983666
 python3 -m pip install -r requirements.txt
 ```
+
+The project-import commits must be pushed to the fork before this folder is available to a new remote clone. In an existing local checkout, enter `recognition/ADNI_s4983666/` before running the commands below.
 
 For training, install the additional dependencies in your project environment:
 
@@ -37,6 +39,12 @@ python3 -m pip install -r requirements-train.txt
 ```
 
 The training requirements pin PyTorch 2.6.0 and Matplotlib 3.9.4. Local CPU verification used Python 3.12.14 and Pillow 12.3.0. GPU training requires a PyTorch CUDA build compatible with the server's driver; follow the [official PyTorch installation instructions](https://pytorch.org/get-started/locally/) or the course environment instructions. The code does not require torchvision or scikit-learn. Every training run records its actual package versions, CUDA build, and device information in `config.json`.
+
+The completed server baseline used Python 3.11.15, PyTorch 2.13.0, Pillow 12.3.0 and Matplotlib 3.11.1 on an NVIDIA A100-PCIE-40GB, with CUDA build 13.0. These recorded server versions differ from the local CPU reference environment above.
+
+## Local workspace files
+
+The local migration also copies `outputs/`, the coursework PDF and the local `.venv/` into this project folder. They remain ignored by Git. Outputs include private split manifests, prediction records, checkpoints and local review reports; keep them outside all public commits. Historical paths inside experiment configurations remain unchanged because they record where those experiments actually ran. Recreate `.venv/` on a different machine rather than transferring its platform-specific packages.
 
 The dataset must be obtained separately through the course's authorised access. Expected layout:
 
@@ -89,7 +97,22 @@ The project owner ran both commands and supplied their output. The reported veri
 
 The original folders shared 216 patients. The new manifests passed patient, scan, path, exact-file, and exact-decoded-pixel separation checks at the required boundaries. Source data matched the recorded manifests, and each development sample appeared in exactly one outer validation fold.
 
-These are user-supplied server results, not a local rerun of the real dataset. Local tests use synthetic data. The real images, metadata, generated patient manifests, and model weights are excluded from version control.
+The complete server-generated manifests were subsequently copied into the ignored local `outputs/adni_splits_v1/` folder. Their checksums, frozen assignments, recorded identity/hash boundaries and correspondence with the five baseline runs were checked locally. This is not a local rerun against the original MRI pixels or metadata; those source files remain on the server. Local execution tests use synthetic data. The real images, metadata, generated patient manifests, and model weights are excluded from version control.
+
+## Initial five-fold baseline results
+
+These are development outer-validation results, using the fixed patient splits, seed base 3710, scan-mean aggregation and decision threshold 0.5. The one-epoch smoke check is excluded.
+
+| Fold | Scan accuracy | Macro F1 | AUROC |
+|---|---:|---:|---:|
+| 1 | 83.41% | 0.8339 | 0.9136 |
+| 2 | 56.50% | 0.5557 | 0.6737 |
+| 3 | 87.77% | 0.8775 | 0.9241 |
+| 4 | 82.33% | 0.8216 | 0.9064 |
+| 5 | 75.38% | 0.7538 | 0.8167 |
+| Mean | 77.08% | 0.7685 | 0.8469 |
+
+The sample standard deviation of fold accuracy is 12.33 percentage points, showing substantial variation. Validation covers 476 patients, 1,050 scans and 21,000 slices. Independent calculations reproduce the reported metrics, and the predictions match the corresponding frozen manifests. These scores do not measure final-test performance. The next planned diagnostic repeats every fold with training seed bases 4710 and 5710 while preserving the existing split and training settings; every repetition must be retained and reported.
 
 ## Baseline model and evaluation
 
@@ -179,4 +202,4 @@ Tests cover patient isolation, fold coverage, reproducibility, missing or corrup
 
 ## Artificial Intelligence Usage Disclosure
 
-OpenAI Codex assisted with the data-audit script, baseline model and training/inference code, metrics, synthetic tests, code comments, and protocol documentation. Validation includes source review, synthetic integrity tests, known metric examples, and actual CPU training with checkpoint-reload comparisons. The project owner executed the real-data audit on the course server; baseline training on that real dataset remains to be run. This development note should be incorporated into the final course-required AI-use disclosure; it does not replace that disclosure.
+OpenAI Codex assisted with the data-audit script, baseline model and training/inference code, metrics, synthetic tests, code comments, protocol documentation, result review and repository migration. Validation includes source review, synthetic integrity tests, known metric examples, actual CPU training with checkpoint-reload comparisons, and independent review of uploaded baseline predictions and frozen manifests. The project owner executed the real-data audit and first five-fold CNN baseline on the course server. This development note should be incorporated into the final course-required AI-use disclosure; it does not replace that disclosure.
