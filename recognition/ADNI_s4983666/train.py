@@ -1,4 +1,4 @@
-"""Train a fresh CNN on one frozen development fold and evaluate outer val once.
+"""Train a fresh classifier on one frozen development fold and evaluate outer val once.
 
 The calibration and final-test sets are used only by the source integrity audit;
 their images/labels never enter training, checkpoint selection, or model scoring.
@@ -15,11 +15,14 @@ import torch
 from torch import nn
 
 from dataset import load_fold
-from modules import SmallCNN, count_parameters
+from modules import create_model, count_parameters, model_minimum_size
 from training_utils import (
     code_fingerprints, environment_info, evaluate, make_loader, plot_history,
     seed_everything, select_device, sync_device, validate_output, write_csv, write_json,
 )
+
+
+MODEL_CHOICES = {"small_cnn": "small_cnn_v1", "convnext_tiny": "convnext_tiny_v1"}
 
 
 def train_epoch(model, loader, optimizer, criterion, device):
@@ -42,10 +45,16 @@ def train_epoch(model, loader, optimizer, criterion, device):
 
 def run(args):
     """Keep checkpoint selection and outer-fold evaluation in separate phases."""
+    # Preserve the original default for CLI users and existing Python callers.
+    requested_model = getattr(args, "model", "small_cnn")
+    if requested_model not in MODEL_CHOICES:
+        raise ValueError(f"Unsupported model: {requested_model}")
+    model_name = MODEL_CHOICES[requested_model]
+    minimum_size = model_minimum_size(model_name)
     if args.epochs < 1 or args.patience < 1 or args.batch_size < 1 or args.workers < 0 or args.threads < 1:
         raise ValueError("Epochs, patience, batch size, and threads must be positive; workers cannot be negative.")
-    if min(args.image_height, args.image_width) < 16:
-        raise ValueError("Image height and width must be at least 16.")
+    if min(args.image_height, args.image_width) < minimum_size:
+        raise ValueError(f"Image height and width must be at least {minimum_size} for {requested_model}.")
     if not all(math.isfinite(v) for v in (args.lr, args.weight_decay, args.min_delta)):
         raise ValueError("Optimizer and early-stopping settings must be finite.")
     if args.lr <= 0 or args.weight_decay < 0 or args.min_delta < 0:
@@ -61,7 +70,7 @@ def run(args):
     image_size = (args.image_height, args.image_width)
 
     # No resume option: every run/fold creates an independent model and optimizer.
-    model = SmallCNN().to(device)
+    model = create_model(model_name).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     class_counts = Counter(int(row["label"]) for row in data["train"])
     if class_counts[0] == 0 or class_counts[1] == 0:
@@ -73,7 +82,8 @@ def run(args):
     early_loader = make_loader(data["early_stop"], *loader_args, shuffle=False, device=device)
 
     config = {
-        "checkpoint_format_version": 1, "model_name": "small_cnn_v1",
+        "checkpoint_format_version": 1, "model_name": model_name,
+        "initialization": "random", "pretrained_weights": None,
         "fold": args.fold, "seed": seed, "seed_base": args.seed,
         "image_size": list(image_size), "expected_slices": expected_slices,
         "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
@@ -96,7 +106,8 @@ def run(args):
         torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
     history, best_loss, patience_loss, stale_epochs, best_epoch = [], math.inf, math.inf, 0, 0
-    print(f"Training fold {args.fold} on {device}; selection uses early-stop scans only.", flush=True)
+    print(f"Training {model_name}, fold {args.fold} on {device}; "
+          "selection uses early-stop scans only.", flush=True)
 
     for epoch in range(1, args.epochs + 1):
         epoch_started = time.perf_counter()
@@ -145,6 +156,7 @@ def run(args):
     sync_device(device)
     result = {
         "status": "complete", "evaluation_role": "development_outer_validation",
+        "model_name": model_name,
         "fold": args.fold, "best_epoch": best_epoch, "epochs_completed": len(history),
         "best_early_stop_scan_loss": best_loss, "manifest_sha256": data["manifest_sha256"],
         "aggregation": config["aggregation"], "threshold": 0.5, "calibration": "not_fitted",
@@ -172,6 +184,8 @@ def main(argv=None):
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--splits-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model", choices=tuple(MODEL_CHOICES), default="small_cnn",
+                        help="Fresh randomly initialized architecture (default: small_cnn).")
     parser.add_argument("--fold", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=5)

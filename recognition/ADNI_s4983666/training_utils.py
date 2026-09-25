@@ -1,4 +1,4 @@
-"""Shared inference, reproducibility, and artifact helpers for the baseline.
+"""Shared inference, reproducibility, and artifact helpers for both classifiers.
 
 Seeding and checkpoint loading follow the PyTorch documentation:
 https://docs.pytorch.org/docs/2.6/notes/randomness.html
