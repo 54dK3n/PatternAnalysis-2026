@@ -96,12 +96,12 @@ def inventory(data_root, expected_slices):
         import PIL
         from PIL import Image, ImageOps
     except ImportError as exc:
-        raise AuditError("缺少 Pillow。请在当前 Python 环境安装 Pillow 后运行。") from exc
+        raise AuditError("Pillow is missing. Install Pillow in the current Python environment before running.") from exc
 
     metadata_path = data_root / "meta_data_with_label.json"
     metadata_bytes = metadata_path.read_bytes()
     metadata = json.loads(metadata_bytes.decode("utf-8-sig"))
-    require(isinstance(metadata, dict), "元数据顶层必须是字典。")
+    require(isinstance(metadata, dict), "The metadata root must be a dictionary.")
     rows, errors, ignored = [], [], []
     seen_slices = set()
     identities = {}
@@ -111,30 +111,30 @@ def inventory(data_root, expected_slices):
     for split in ("train", "test"):
         for folder_label, (metadata_label, label) in SOURCE_LABELS.items():
             folder = data_root / "AD_NC" / split / folder_label
-            require(folder.is_dir(), f"缺少源目录: {folder}")
+            require(folder.is_dir(), f"Missing source directory: {folder}")
             files = sorted(path for path in folder.rglob("*") if path.is_file())
             jpeg_files = [path for path in files if path.suffix.lower() in (".jpeg", ".jpg")]
             ignored.extend(str(path.relative_to(data_root)) for path in files
                            if path.suffix.lower() not in (".jpeg", ".jpg"))
-            require(jpeg_files, f"目录没有 JPEG 图片: {folder}")
+            require(jpeg_files, f"No JPEG images found in directory: {folder}")
             for path in jpeg_files:
                 relative = path.relative_to(data_root).as_posix()
                 try:
                     match = re.fullmatch(r"(\d+)_(\d+)", path.stem)
-                    require(match is not None, f"文件名无法解析: {relative}")
+                    require(match is not None, f"Cannot parse image filename: {relative}")
                     image_id, slice_text = match.groups()
                     slice_index = int(slice_text)
                     record = metadata.get(image_id)
-                    require(isinstance(record, dict), f"JSON 缺少有效影像记录 {image_id}: {relative}")
+                    require(isinstance(record, dict), f"JSON has no valid scan record for {image_id}: {relative}")
                     require(type(record.get("label")) is int and record["label"] == metadata_label,
-                            f"目录/JSON 标签冲突: {relative}, JSON label={record.get('label')!r}")
+                            f"Folder/JSON label mismatch: {relative}, JSON label={record.get('label')!r}")
                     raw = record.get("raw")
-                    require(isinstance(raw, str), f"影像 {image_id} 缺少 raw 路径")
+                    require(isinstance(raw, str), f"Scan {image_id} has no raw path")
                     patient_match = PATIENT_PATTERN.search(raw)
                     source_match = IMAGE_PATTERN.search(raw)
                     require(patient_match is not None and source_match is not None,
-                            f"元数据路径编号无法解析: {raw}")
-                    require(source_match.group(1) == image_id, f"JSON 键和路径影像编号不一致: {image_id}")
+                            f"Cannot parse patient/scan identifiers from metadata path: {raw}")
+                    require(source_match.group(1) == image_id, f"JSON key and path scan identifier disagree: {image_id}")
                     patient_id = patient_match.group(1)
                     # Available derivative paths must refer to the same patient
                     # and scan as raw; missing optional paths are not required.
@@ -142,22 +142,22 @@ def inventory(data_root, expected_slices):
                         value = record.get(field)
                         if value is None:
                             continue
-                        require(isinstance(value, str), f"{image_id}: {field} 不是路径字符串")
+                        require(isinstance(value, str), f"{image_id}: {field} is not a path string")
                         pm, im = PATIENT_PATTERN.search(value), IMAGE_PATTERN.search(value)
                         require(pm is not None and im is not None and pm.group(1) == patient_id
-                                and im.group(1) == image_id, f"{image_id}: {field} 与 raw 身份不一致")
+                                and im.group(1) == image_id, f"{image_id}: {field} and raw identify different patients or scans")
                     identity = (patient_id, label)
                     require(image_id not in identities or identities[image_id] == identity,
-                            f"同一影像映射到不同患者或标签: {image_id}")
+                            f"One scan maps to different patients or labels: {image_id}")
                     identities[image_id] = identity
                     slice_key = (image_id, slice_index)
                     # Different filenames must not disguise the same scan/slice.
-                    require(slice_key not in seen_slices, f"重复影像/切片编号: {slice_key}")
+                    require(slice_key not in seen_slices, f"Duplicate scan/slice identifier: {slice_key}")
                     seen_slices.add(slice_key)
 
                     content = path.read_bytes()
                     with Image.open(io.BytesIO(content)) as original:
-                        require(original.format == "JPEG", f"扩展名与实际格式不符: {relative}")
+                        require(original.format == "JPEG", f"File extension does not match the actual image format: {relative}")
                         original.load()  # Detect truncated/undecodable JPEGs, not just header errors.
                         mode = original.mode
                         # Compare decoded pixels as well as file bytes: JPEG
@@ -171,9 +171,9 @@ def inventory(data_root, expected_slices):
                     if previous is not None:
                         previous_patient, previous_label, previous_path = previous
                         require(previous_label == label,
-                                f"相同像素对应不同标签: {previous_path} <-> {relative}")
+                                f"Identical pixels have different labels: {previous_path} <-> {relative}")
                         require(previous_patient == patient_id,
-                                f"跨患者重复像素，需人工核查后再划分: {previous_path} <-> {relative}")
+                                f"Identical pixels occur across patients; review before splitting: {previous_path} <-> {relative}")
                         # Same-patient, same-label copies are recorded; keeping
                         # that patient together prevents them crossing roles.
                         within_patient_duplicates += 1
@@ -186,13 +186,13 @@ def inventory(data_root, expected_slices):
                 except (AuditError, OSError, ValueError) as exc:
                     errors.append(f"{relative}: {exc}")
     if errors:
-        raise AuditError(f"数据审计失败，共 {len(errors)} 项异常；前 12 项:\n" + "\n".join(errors[:12]))
+        raise AuditError(f"Data audit failed with {len(errors)} issues; first 12:\n" + "\n".join(errors[:12]))
 
     scans = Counter(row["image_id"] for row in rows)
     # image_id identifies a scan, whereas each row is one JPEG slice. The
     # expected count checks completeness; it does not infer slice anatomy.
     incomplete = {key: count for key, count in scans.items() if count != expected_slices}
-    require(not incomplete, f"影像切片数应为 {expected_slices}，异常示例: {list(incomplete.items())[:10]}")
+    require(not incomplete, f"Expected {expected_slices} slices per scan; invalid examples: {list(incomplete.items())[:10]}")
     rows.sort(key=lambda row: row["relative_path"])
     profiles = profiles_for(rows)
     old_patients = {split: {r["patient_id"] for r in rows if r["original_split"] == split}
@@ -221,7 +221,7 @@ def stratified_take(patient_ids, count, profiles, rng):
     independent of scikit-learn's sample-weighted StratifiedGroupKFold.
     """
     patient_ids = sorted(patient_ids)
-    require(0 < count < len(patient_ids), "患者子集太小，无法建立所要求的独立留出组。")
+    require(0 < count < len(patient_ids), "The patient subset is too small for the requested independent holdout.")
     buckets = defaultdict(list)
     for patient_id in patient_ids:
         buckets[profiles[patient_id]["stratum"]].append(patient_id)
@@ -254,7 +254,7 @@ def make_plan(rows, config):
     test, remaining = stratified_take(patients, test_count, profiles, rng)
     calibration, development = stratified_take(remaining, calibration_count, profiles, rng)
     folds = config["folds"]
-    require(len(development) >= folds, "开发集患者数量少于折数。")
+    require(len(development) >= folds, "The development set has fewer patients than folds.")
     assignment = {patient: ("test", "") for patient in test}
     assignment.update({patient: ("calibration", "") for patient in calibration})
     loads = [0] * folds
@@ -331,14 +331,14 @@ def check_boundaries(artifacts, config):
         """Require both classes and pairwise disjoint identities/content."""
         for name in roles:
             rows = artifacts[name]
-            require(rows, f"划分为空: {name}")
+            require(rows, f"Empty partition: {name}")
             require({r["label"] for r in rows} == {"0", "1"},
-                    f"{name} 未包含两种诊断，不能可靠计算所需分类指标。请检查患者规模/预先确定的比例。")
+                    f"{name} does not contain both diagnoses, so the required classification metrics cannot be reliably computed. Check the patient count and prespecified fractions.")
         for index, first in enumerate(roles):
             for second in roles[index + 1:]:
                 for field in ("patient_id", "image_id", "relative_path", "file_sha256", "pixel_sha256"):
                     overlap = {r[field] for r in artifacts[first]} & {r[field] for r in artifacts[second]}
-                    require(not overlap, f"边界重叠: {first} <-> {second}, {field}: {list(overlap)[:3]}")
+                    require(not overlap, f"Overlap across partitions: {first} <-> {second}, {field}: {list(overlap)[:3]}")
 
     check(["development.csv", "calibration.csv", "test.csv"])
     all_val_paths = []
@@ -348,10 +348,10 @@ def check_boundaries(artifacts, config):
         roles = [f"{prefix}/{name}.csv" for name in ("train", "early_stop", "val")]
         check(roles + ["calibration.csv", "test.csv"])
         union = {r["relative_path"] for role in roles for r in artifacts[role]}
-        require(union == development_paths, f"第 {fold} 折没有准确覆盖完整开发集。")
+        require(union == development_paths, f"Fold {fold} does not exactly cover the complete development set.")
         all_val_paths.extend(r["relative_path"] for r in artifacts[f"{prefix}/val.csv"])
     require(set(all_val_paths) == development_paths and len(all_val_paths) == len(development_paths),
-            "每张开发集图片必须且只能作为一次外层验证图片。")
+            "Every development image must appear in outer validation exactly once.")
 
 
 def write_csv(path, rows, fields):
@@ -367,7 +367,7 @@ def read_csv(path, fields):
     """Read a manifest only when its columns match the declared schema."""
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        require(reader.fieldnames == fields, f"CSV 字段不符合协议: {path}")
+        require(reader.fieldnames == fields, f"CSV fields do not match the protocol: {path}")
         return list(reader)
 
 
@@ -375,22 +375,22 @@ def config_from_args(args):
     """Validate the reproducible split settings used by prepare and verify."""
     config = {key: getattr(args, key) for key in ("seed", "folds", "test_fraction",
               "calibration_fraction", "early_stop_fraction", "expected_slices")}
-    require(config["folds"] >= 2, "交叉验证至少需要 2 折。")
-    require(config["expected_slices"] > 0, "expected-slices 必须大于零。")
+    require(config["folds"] >= 2, "Cross-validation requires at least 2 folds.")
+    require(config["expected_slices"] > 0, "expected-slices must be greater than zero.")
     require(0 < config["test_fraction"] < 1 and 0 < config["calibration_fraction"] < 1
             and config["test_fraction"] + config["calibration_fraction"] < 1,
-            "测试/校准比例必须大于零，且其和小于 1。")
-    require(0 < config["early_stop_fraction"] < 0.5, "early-stop-fraction 应在 0 和 0.5 之间。")
+            "Test and calibration fractions must be positive and sum to less than 1.")
+    require(0 < config["early_stop_fraction"] < 0.5, "early-stop-fraction must be between 0 and 0.5.")
     return config
 
 
 def prepare(args):
     """Audit sources, create a new split, and publish only complete outputs."""
     root, output = args.data_root.resolve(), args.output.resolve()
-    require(output != root and root not in output.parents, "输出目录必须在源数据目录之外。")
-    require(not output.exists(), f"输出已存在，不会覆盖既定划分: {output}。请使用 verify 检查。")
+    require(output != root and root not in output.parents, "The output directory must be outside the source dataset directory.")
+    require(not output.exists(), f"Output already exists; refusing to overwrite the frozen split: {output}. Use verify to check it.")
     config = config_from_args(args)
-    print("正在核对元数据并读取全部 JPEG 像素……", flush=True)
+    print("Checking metadata and decoding all JPEG images...", flush=True)
     source_rows, audit = inventory(root, config["expected_slices"])
     profiles = profiles_for(source_rows)
     assignment, early_stops = make_plan(source_rows, config)
@@ -424,18 +424,18 @@ def prepare(args):
         checksums = {p.relative_to(stage).as_posix(): digest(p.read_bytes())
                      for p in sorted(stage.rglob("*")) if p.is_file()}
         write_json(stage / "COMPLETED.json", {"protocol_version": VERSION, "sha256": checksums})
-        require(not output.exists(), f"输出目录在运行期间被创建，拒绝覆盖: {output}")
+        require(not output.exists(), f"The output directory was created during this run; refusing to overwrite: {output}")
         stage.rename(output)
     finally:
         if stage.exists():
             shutil.rmtree(stage)
-    print(f"原始 train/test 重叠患者: {audit['original_patient_overlap']}")
-    print(f"审计后数据: {audit['patients']} 名患者 / {audit['image_records']} 个影像 / {audit['images']} 张图片")
+    print(f"Patients shared by the original train/test folders: {audit['original_patient_overlap']}")
+    print(f"Audited dataset: {audit['patients']} patients / {audit['image_records']} scans / {audit['images']} images")
     for name in ("development.csv", "calibration.csv", "test.csv"):
         value = report["partitions"][name]
-        print(f"{name}: {value['patients']} 名患者, {value['images']} 张图片")
-    print(f"已建立 {config['folds']} 折，所有患者/影像/精确重复边界检查通过。")
-    print(f"输出: {output}\n请在训练前运行 verify；训练必须读取生成的清单。")
+        print(f"{name}: {value['patients']} patients, {value['images']} images")
+    print(f"Created {config['folds']} folds; all patient, scan, and exact-duplicate boundary checks passed.")
+    print(f"Output: {output}\nRun verify before training; training must read the generated manifests.")
 
 
 def verify(args):
@@ -447,44 +447,44 @@ def verify(args):
     """
     root, output = args.data_root.resolve(), args.output.resolve()
     seal = read_json(output / "COMPLETED.json")
-    require(seal.get("protocol_version") == VERSION, "不支持的清单协议版本。")
+    require(seal.get("protocol_version") == VERSION, "Unsupported manifest protocol version.")
     checksums = seal.get("sha256")
-    require(isinstance(checksums, dict), "完成标记缺少文件校验信息。")
+    require(isinstance(checksums, dict), "The completion marker is missing file checksums.")
     actual_files = {p.relative_to(output).as_posix() for p in output.rglob("*")
                     if p.is_file() and p != output / "COMPLETED.json"}
-    require(actual_files == set(checksums), "输出目录文件集合发生变化或不完整。")
+    require(actual_files == set(checksums), "The output file set has changed or is incomplete.")
     for relative, expected in checksums.items():
         path = output / relative
-        require(path.resolve().is_relative_to(output), "完成标记含目录外路径。")
-        require(digest(path.read_bytes()) == expected, f"输出文件被修改: {relative}")
+        require(path.resolve().is_relative_to(output), "The completion marker contains a path outside the output directory.")
+        require(digest(path.read_bytes()) == expected, f"Output file was modified: {relative}")
     report = read_json(output / "report.json")
-    require(report.get("protocol_version") == VERSION, "报告协议版本不一致。")
+    require(report.get("protocol_version") == VERSION, "Report protocol version mismatch.")
     config = config_from_args(argparse.Namespace(**report["config"]))
-    print("正在重新读取真实数据、元数据和图片像素，独立核查清单……", flush=True)
+    print("Rereading source data, metadata, and decoded pixels to independently verify the manifests...", flush=True)
     source_rows, audit = inventory(root, config["expected_slices"])
     for field in ("source_fingerprint", "metadata_sha256"):
-        require(audit[field] == report["source_audit"][field], f"源数据/元数据已变化: {field}")
+        require(audit[field] == report["source_audit"][field], f"Source data or metadata has changed: {field}")
     assignment, early_stops = make_plan(source_rows, config)
     # Reproduce the frozen seed/protocol, then compare every manifest row.
     # Editing a patient ID and updating its checksum cannot bypass this check.
-    require(early_stops == report["early_stop_patients"], "早停患者清单与固定随机种子不一致。")
+    require(early_stops == report["early_stop_patients"], "Early-stopping patient lists disagree with the fixed seed.")
     profiles = profiles_for(source_rows)
     expected_rows = [dict(row, patient_stratum=profiles[row["patient_id"]]["stratum"],
                          partition=assignment[row["patient_id"]][0], fold=assignment[row["patient_id"]][1])
                      for row in source_rows]
     expected_artifacts = artifacts_for(expected_rows, config, early_stops)
-    require(set(checksums) == set(expected_artifacts) | {"report.json"}, "清单文件集合与协议不一致。")
+    require(set(checksums) == set(expected_artifacts) | {"report.json"}, "The manifest file set does not match the protocol.")
     actual_artifacts = {}
     for name, expected in expected_artifacts.items():
         actual = read_csv(output / name, PATIENT_FIELDS if name == "patients.csv" else FIELDS)
-        require(actual == expected, f"清单与真实身份、固定划分或完整覆盖不一致: {name}")
+        require(actual == expected, f"Manifest disagrees with source identities, the fixed split, or complete coverage: {name}")
         actual_artifacts[name] = actual
     check_boundaries(actual_artifacts, config)
     for name, expected in expected_artifacts.items():
         if name not in ("all.csv", "patients.csv"):
-            require(report["partitions"][name] == partition_summary(expected), f"统计报告与清单不一致: {name}")
-    print("PASS：真实数据一致；患者/影像/路径/精确重复无跨组重叠；每折完整且每张开发图片恰好验证一次。")
-    print("此结果不替代训练流程、近似重复或上游预处理审查。")
+            require(report["partitions"][name] == partition_summary(expected), f"Reported statistics disagree with the manifest: {name}")
+    print("PASS: source data matches; no patient, scan, path, or exact-duplicate overlap across required boundaries; every fold is complete and each development image is validated exactly once.")
+    print("This result does not replace review of the training pipeline, near-duplicates, or upstream preprocessing.")
 
 
 def main(argv=None):
