@@ -127,7 +127,7 @@ A patient may have different diagnoses at different visits. Do not average all f
 
 ## Manifest Generation and Independent Verification
 
-The tool is `adni_splits.py`, which requires Python 3.9 or newer and Pillow. It currently implements **data indexing, splitting, and integrity auditing**. Model training, calibration, and threshold freezing are not yet implemented. The training rules above are mandatory protocol requirements, not guarantees already enforced by training code.
+The audit tool is `adni_splits.py`, which requires Python 3.9 or newer and Pillow. It implements **data indexing, splitting, and integrity auditing**. Baseline development-fold training and checkpoint inference are implemented in `train.py` and `predict.py`; see the README for their dependencies and commands. The baseline uses fixed intensity scaling, training-only loss weights, an independent early-stop subset, and outer validation after checkpoint selection. Final refitting, confidence calibration, and final-test evaluation are not yet implemented. The full protocol remains a requirement for those future stages.
 
 The tool indexes only files with `.jpg` or `.jpeg` extensions in the four source directories and verifies that their actual format is JPEG. Other files are excluded from the experiment manifests and listed under `source_audit.ignored_non_jpeg_files` in `report.json`. If an excluded file is an image that should be part of the experiment, investigate it first; exclusion does not mean the image passed the audit.
 
@@ -182,4 +182,4 @@ Identical images with the same patient and label may be retained and reported. P
 
 File and decoded-pixel digests can identify exact duplicates even after renaming, but **cannot establish the absence of approximate duplicates**. The tool also cannot independently establish that patient IDs are correct or that upstream course preprocessing did not fit statistics using all patients. Confirm upstream processing with the data provider and describe any unverified aspects as limitations in the report.
 
-The purpose of this protocol is to establish leakage-prevention boundaries that can be inspected and reproduced. A split should only be described as having passed the implemented data checks after the real server run and review of its results. The user has reported a successful run for the current split, as documented above; this does not establish that the not-yet-implemented training workflow has passed its own checks.
+The purpose of this protocol is to establish leakage-prevention boundaries that can be inspected and reproduced. A split should only be described as having passed the implemented data checks after the real server run and review of its results. The user has reported a successful audit for the current split, as documented above. Baseline training has been checked on synthetic CPU fixtures; real-data training and the future final-calibration/test workflow require their own verification.
