@@ -10,9 +10,9 @@ from unittest import mock
 
 import torch
 
-import predict
-import train
-from modules import SmallCNN
+from engine import prediction as predict
+from engine import training as train
+from models import SmallCNN
 import test_adni_splits as split_fixture
 
 
@@ -55,7 +55,7 @@ class BaselineTrainingTests(unittest.TestCase):
                 calls.append("val")
             return scores, slices, scans
 
-        with mock.patch("train.evaluate", side_effect=observed_evaluate), contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch("engine.training.evaluate", side_effect=observed_evaluate), contextlib.redirect_stdout(io.StringIO()):
             result = train.run(self.args)
         self.assertEqual(calls, ["early_stop", "early_stop", "val"])
         self.assertEqual(result["best_epoch"], 1)

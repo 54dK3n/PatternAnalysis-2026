@@ -4,7 +4,7 @@ import json
 import math
 import unittest
 
-from metrics import aggregate_scans, binary_metrics
+from evaluation.metrics import aggregate_scans, binary_metrics
 
 
 def slice_record(image_id, slice_index, probability, label=1, patient_id="001_S_0001"):

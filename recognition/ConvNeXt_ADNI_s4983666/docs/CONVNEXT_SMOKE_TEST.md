@@ -2,6 +2,8 @@
 
 Date: 2026-09-25. Result: **PASS**.
 
+This is the historical record for the initial ConvNeXt implementation. The later package refactor and optional augmentation are documented separately in [REFACTOR_SMOKE_TEST.md](REFACTOR_SMOKE_TEST.md).
+
 The complete grayscale ConvNeXt-Tiny has 27,817,825 trainable parameters. This check validates local CPU execution and checkpoint compatibility; it does not measure ADNI classification performance. The model starts from random weights and downloads no external weights.
 
 ## Automated tests

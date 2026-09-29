@@ -1,78 +1,27 @@
-"""Read audited ADNI fold manifests and deterministically prepare MRI slices.
+"""Load immutable source slices with explicit role-specific processing."""
 
-The baseline uses fixed intensity scaling rather than statistics estimated
-from the dataset. It does not augment validation images, and the fold loader
-never returns calibration or final-test images to the training pipeline.
-"""
-
-import argparse
-from collections import Counter
 import io
 from pathlib import Path
+import random
 
 from PIL import Image, ImageOps
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
-import adni_splits
-
-
-def manifest_sha256(splits_dir):
-    """Fingerprint the frozen manifest set for checkpoints and run records."""
-    return adni_splits.digest((Path(splits_dir) / "COMPLETED.json").read_bytes())
-
-
-def load_fold(data_root, splits_dir, fold):
-    """Fully audit the sources before exposing one development fold.
-
-    Verification is mandatory on every invocation. The source folders' old
-    train/test names are provenance only; role membership comes exclusively
-    from the newly audited patient manifests.
-    """
-    data_root, splits_dir = Path(data_root).resolve(), Path(splits_dir).resolve()
-    adni_splits.verify(argparse.Namespace(data_root=data_root, output=splits_dir))
-    seal_bytes = (splits_dir / "COMPLETED.json").read_bytes()
-    seal = adni_splits.read_json(splits_dir / "COMPLETED.json")
-
-    def read_verified(path, reader):
-        relative = path.relative_to(splits_dir).as_posix()
-        expected = seal["sha256"][relative]
-        adni_splits.require(adni_splits.digest(path.read_bytes()) == expected,
-                            f"Manifest changed after verification: {relative}")
-        value = reader(path)
-        adni_splits.require(adni_splits.digest(path.read_bytes()) == expected,
-                            f"Manifest changed while being read: {relative}")
-        return value
-
-    report = read_verified(splits_dir / "report.json", adni_splits.read_json)
-    folds = report["config"]["folds"]
-    adni_splits.require(type(fold) is int and 1 <= fold <= folds,
-                        f"fold must be an integer between 1 and {folds}.")
-    expected_slices = report["config"]["expected_slices"]
-    result = {"report": report, "manifest_sha256": adni_splits.digest(seal_bytes)}
-    for role in ("train", "early_stop", "val"):
-        path = splits_dir / f"fold_{fold:02d}" / f"{role}.csv"
-        rows = read_verified(path, lambda value: adni_splits.read_csv(value, adni_splits.FIELDS))
-        adni_splits.require(rows and all(row["partition"] == "development" for row in rows),
-                            f"Only nonempty development manifests are allowed for {role}.")
-        scans = Counter(row["image_id"] for row in rows)
-        adni_splits.require(all(count == expected_slices for count in scans.values()),
-                            f"The {role} manifest contains an incomplete scan.")
-        result[role] = rows
-    adni_splits.require((splits_dir / "COMPLETED.json").read_bytes() == seal_bytes,
-                        "The completion marker changed while loading the fold.")
-    return result
+from . import splits as adni_splits
+from .augmentation import AugmentationConfig, augment_image
 
 
 class ADNISliceDataset(Dataset):
-    """Load one slice per item with fixed, deterministic grayscale processing.
+    """Load one slice per item with fixed normalization and optional train augmentation.
 
     ``image_size`` is (height, width). Pixel values are mapped from [0, 255]
     to [-1, 1] with fixed constants; no training, validation, calibration, or
     test population statistics are estimated by this transform.
     """
 
-    def __init__(self, rows, data_root, image_size=(240, 256)):
+    def __init__(self, rows, data_root, image_size=(240, 256), *, role="evaluation",
+                 augmentation=None, augmentation_seed=0):
         self.data_root = Path(data_root).resolve()
         adni_splits.require(self.data_root.is_dir(), f"Missing data directory: {self.data_root}")
         adni_splits.require(len(image_size) == 2 and all(type(n) is int and n > 0 for n in image_size),
@@ -80,6 +29,20 @@ class ADNISliceDataset(Dataset):
         self.image_size = tuple(image_size)
         self.rows = [dict(row) for row in rows]
         adni_splits.require(self.rows, "A slice dataset cannot be empty.")
+        adni_splits.require(role in ("train", "evaluation", "early_stop", "val", "calibration", "test"),
+                            f"Unsupported dataset role: {role!r}")
+        self.role = role
+        self.augmentation = AugmentationConfig() if augmentation is None else augmentation
+        adni_splits.require(isinstance(self.augmentation, AugmentationConfig),
+                            "augmentation must be an AugmentationConfig.")
+        adni_splits.require(type(augmentation_seed) is int, "augmentation_seed must be an integer.")
+        self.augmentation_seed = augmentation_seed
+        if self.augmentation.name != "none":
+            adni_splits.require(role == "train", "Augmentation is permitted only for the train role.")
+            adni_splits.require(all(row.get("partition") == "development" for row in self.rows),
+                                "Augmentation requires development training manifests.")
+        self._augmentation_rng = None
+        self._augmentation_worker = None
         self.paths = []
         seen_paths, seen_resolved_paths, seen_slices = set(), set(), set()
         scan_owners = {}
@@ -120,6 +83,16 @@ class ADNISliceDataset(Dataset):
     def __len__(self):
         return len(self.rows)
 
+    def _rng(self):
+        """Maintain a private RNG stream for this process and loader worker seed."""
+        worker = get_worker_info()
+        identity = ("main", self.augmentation_seed) if worker is None else ("worker", worker.id, worker.seed)
+        if self._augmentation_worker != identity:
+            seed = self.augmentation_seed if worker is None else worker.seed
+            self._augmentation_rng = random.Random(seed)
+            self._augmentation_worker = identity
+        return self._augmentation_rng
+
     def __getitem__(self, index):
         row = self.rows[index]
         content = self.paths[index].read_bytes()
@@ -133,6 +106,8 @@ class ADNISliceDataset(Dataset):
             target_size = (self.image_size[1], self.image_size[0])
             if image.size != target_size:
                 image = image.resize(target_size, resample=Image.Resampling.BILINEAR)
+            if self.augmentation.name != "none":
+                image = augment_image(image, self.augmentation, self._rng())
             # bytearray supplies writable storage for frombuffer, and to()
             # creates an independent float tensor before the buffer expires.
             pixels = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.uint8)
