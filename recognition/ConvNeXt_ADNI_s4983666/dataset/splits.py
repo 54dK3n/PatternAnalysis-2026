@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Create and verify patient-isolated ADNI manifests without modifying images.
+"""Audit ADNI sources and create or verify patient-isolated manifests.
 
-Requires Python >= 3.9 and Pillow. See DATA_PROTOCOL.md for training safeguards
+The pinned audit environment requires Python >= 3.10 and Pillow.
+See docs/DATA_PROTOCOL.md for training safeguards
 that these checks cannot enforce. A patient may have several scans, and each
 scan contains several JPEG slices; the patient is the unit of every split.
 Checks cover supplied identifiers and exact image duplicates, not approximate
@@ -21,6 +22,7 @@ import re
 import shutil
 import sys
 import tempfile
+from typing import Any, Dict, List, Optional, Sequence
 
 VERSION = 1
 SOURCE_FIELDS = [
@@ -487,10 +489,165 @@ def verify(args):
     print("This result does not replace review of the training pipeline, near-duplicates, or upstream preprocessing.")
 
 
-def main(argv=None):
-    """Expose prepare/verify commands and return a nonzero status on failure."""
+def observed_tree(root: Path, depth: int = 4, examples: int = 3) -> List[str]:
+    """Describe observed directories and sample files before assuming a layout.
+
+    File examples and traversal depth are bounded to keep a full-dataset audit
+    readable. Symlinks are reported but never traversed by this discovery step.
+    """
+    require(root.is_dir(), f"Missing data directory: {root}")
+    lines = [f"{root.name}/"]
+
+    def visit(directory: Path, level: int) -> None:
+        """Append one directory's actual entries with bounded file examples."""
+        entries = sorted(directory.iterdir(), key=lambda path: path.name)
+        directories = [path for path in entries if path.is_dir() and not path.is_symlink()]
+        files = [path for path in entries if path not in directories]
+        prefix = "  " * level
+        for path in files[:examples]:
+            suffix = " [symlink]" if path.is_symlink() else ""
+            lines.append(f"{prefix}{path.name}{suffix}")
+        if len(files) > examples:
+            lines.append(f"{prefix}... ({len(files)} files/links in this directory)")
+        for path in directories:
+            lines.append(f"{prefix}{path.name}/")
+            if level < depth:
+                visit(path, level + 1)
+            else:
+                lines.append(f"{prefix}  ... (depth limit)")
+
+    visit(root, 1)
+    return lines
+
+
+def supplied_split_summary(rows: List[Dict[str, str]], examples: int) -> Dict[str, Any]:
+    """Count each supplied split without assigning any new experimental roles."""
+    from PIL import Image
+
+    result = {}
+    for split in ("train", "test"):
+        selected = [row for row in rows if row["original_split"] == split]
+        counts = Counter((int(row["width"]), int(row["height"]), row["mode"])
+                         for row in selected)
+        value = partition_summary(selected)
+        value["dimensions"] = [
+            {"width": width, "height": height, "mode": mode,
+             "channels": Image.getmodebands(mode), "images": count}
+            for (width, height, mode), count in sorted(counts.items())
+        ]
+        value["classes"] = {
+            label: partition_summary([row for row in selected if row["folder_label"] == label])
+            for label in SOURCE_LABELS
+        }
+        # Examples include each class and the verified metadata identity link.
+        value["filename_examples"] = [
+            {key: row[key] for key in ("relative_path", "patient_id", "image_id", "slice_index")}
+            for label in SOURCE_LABELS
+            for row in [r for r in selected if r["folder_label"] == label][:examples]
+        ]
+        result[split] = value
+    return result
+
+
+def audit_sources(args: argparse.Namespace) -> int:
+    """Inspect supplied data read-only and block overlapping original splits.
+
+    Reuse the migrated inventory's metadata, decoded-pixel, scan-completeness,
+    and label checks. This M0 command neither prepares manifests nor chooses
+    a replacement split. Original-folder overlap does not assess the boundaries
+    in the existing patient manifests; verify those separately before training.
+    """
+    root, output = args.data_root.resolve(), args.output.resolve()
+    require(args.expected_slices > 0, "expected-slices must be positive.")
+    require(args.tree_depth > 0 and args.examples > 0,
+            "tree-depth and examples must be positive.")
+    require(output != root and root not in output.parents and output not in root.parents,
+            "Audit output must be separate from the source data directory.")
+    require(not output.exists(), f"Output already exists; refusing to overwrite: {output}")
+    config = {
+        "milestone": "M0", "command": "audit", "data_root": str(root),
+        "output": str(output), "expected_slices": args.expected_slices,
+        "tree_depth": args.tree_depth, "examples_per_class": args.examples,
+        "randomness": "None; this audit is deterministic and does not split data.",
+        "python_version": sys.version.split()[0],
+        "script_sha256": digest(Path(__file__).read_bytes()),
+    }
+    report = {
+        "report_type": "data_audit", "status": "failed", "directory_tree": [],
+        "identity_rule": "JPEG <scan_id>_<slice_index>; patient ID from the matching metadata raw filename.",
+        "limitations": [
+            "This is a source audit, not a training or final-test evaluation.",
+            "Patient identifiers come from supplied metadata; near-duplicates are not detected.",
+            "An audit pass does not approve a validation split or a training protocol.",
+        ],
+    }
+    exit_code = 1
+    try:
+        report["directory_tree"] = observed_tree(root, args.tree_depth, args.examples)
+        print("Observed source tree (bounded display):", flush=True)
+        print("\n".join(report["directory_tree"]), flush=True)
+        print("Checking metadata identities, JPEG pixels, and scan completeness...", flush=True)
+        rows, source = inventory(root, args.expected_slices)
+        report["source_audit"] = source
+        report["supplied_splits"] = supplied_split_summary(rows, args.examples)
+        config["pillow_version"] = source["pillow_version"]
+        # Keep the official source folders untouched. In particular, do not
+        # silently repair patient overlap by moving scans into new test roles.
+        checks = {}
+        for field in ("patient_id", "image_id", "file_sha256", "pixel_sha256"):
+            groups = [{row[field] for row in rows if row["original_split"] == split}
+                      for split in ("train", "test")]
+            checks[field] = {"overlap_count": len(groups[0] & groups[1])}
+        report["original_split_checks"] = checks
+        blocked = any(check["overlap_count"] for check in checks.values())
+        report["status"] = "blocked" if blocked else "passed"
+        report["next_step"] = (
+            "The original source-folder split overlaps. Use the existing verified patient manifests "
+            "for experiments and rerun verify against the source data before training. "
+            "This check does not assess manifest boundaries; no new split was generated."
+            if blocked else "Use the existing verified patient manifests for experiments. "
+            "This source audit does not replace independent manifest verification."
+        )
+        exit_code = 2 if blocked else 0
+        print(report["identity_rule"])
+        for split, summary in report["supplied_splits"].items():
+            print(f"{split}: {summary['patients']} patients / {summary['image_records']} scans / {summary['images']} slices")
+            for label, counts in summary["classes"].items():
+                print(f"  {label}: {counts['patients']} patients / {counts['image_records']} scans / {counts['images']} slices")
+            print(f"  Image sizes and channels: {json.dumps(summary['dimensions'])}")
+            print(f"  Verified filename examples: {json.dumps(summary['filename_examples'])}")
+        print(f"Original split overlap: {json.dumps(checks)}")
+        print(f"{report['status'].upper()}: {report['next_step']}")
+    except (AuditError, OSError, ValueError, KeyError, TypeError) as exc:
+        report["error"] = str(exc)
+        print(f"FAILED: {exc}", file=sys.stderr)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Publish both records together. Failed or blocked audits remain explicitly
+    # labelled and cannot be mistaken for prepared split manifests.
+    stage = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=str(output.parent)))
+    try:
+        write_json(stage / "config.json", config)
+        write_json(stage / "metrics.json", report)
+        require(not output.exists(), f"Output was created during the audit: {output}")
+        stage.rename(output)
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+    print(f"Audit records: {output}")
+    return exit_code
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Expose audit/prepare/verify commands and return nonzero on failed checks."""
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    audit_parser = subparsers.add_parser("audit", help="Inspect supplied splits without generating manifests.")
+    audit_parser.add_argument("--data-root", type=Path, default=Path("/home/groups/comp3710/ADNI"))
+    audit_parser.add_argument("--output", type=Path, default=Path("runs/m0_audit"))
+    audit_parser.add_argument("--expected-slices", type=int, default=20)
+    audit_parser.add_argument("--tree-depth", type=int, default=4)
+    audit_parser.add_argument("--examples", type=int, default=3)
     for command in ("prepare", "verify"):
         child = subparsers.add_parser(command)
         child.add_argument("--data-root", type=Path, required=True)
@@ -504,6 +661,8 @@ def main(argv=None):
             child.add_argument("--expected-slices", type=int, default=20)
     args = parser.parse_args(argv)
     try:
+        if args.command == "audit":
+            return audit_sources(args)
         {"prepare": prepare, "verify": verify}[args.command](args)
     except (AuditError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

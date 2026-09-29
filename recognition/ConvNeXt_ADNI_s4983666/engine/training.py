@@ -14,15 +14,13 @@ import time
 import torch
 from torch import nn
 
-from dataset import load_fold
-from modules import create_model, count_parameters, model_minimum_size
-from training_utils import (
-    code_fingerprints, environment_info, evaluate, make_loader, plot_history,
-    seed_everything, select_device, sync_device, validate_output, write_csv, write_json,
-)
-
-
-MODEL_CHOICES = {"small_cnn": "small_cnn_v1", "convnext_tiny": "convnext_tiny_v1"}
+from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
+from dataset.loaders import make_loader
+from dataset.manifests import load_fold
+from evaluation.inference import evaluate
+from models import MODEL_CHOICES, create_model, count_parameters, model_minimum_size
+from utils.artifacts import code_fingerprints, plot_history, validate_output, write_csv, write_json
+from utils.runtime import environment_info, seed_everything, select_device, sync_device
 
 
 def train_epoch(model, loader, optimizer, criterion, device):
@@ -51,6 +49,11 @@ def run(args):
         raise ValueError(f"Unsupported model: {requested_model}")
     model_name = MODEL_CHOICES[requested_model]
     minimum_size = model_minimum_size(model_name)
+    augmentation = make_augmentation(
+        getattr(args, "augmentation", "none"),
+        rotation_degrees=getattr(args, "rotation_degrees", 5.0),
+        translation_fraction=getattr(args, "translation_fraction", 0.03),
+    )
     if args.epochs < 1 or args.patience < 1 or args.batch_size < 1 or args.workers < 0 or args.threads < 1:
         raise ValueError("Epochs, patience, batch size, and threads must be positive; workers cannot be negative.")
     if min(args.image_height, args.image_width) < minimum_size:
@@ -78,16 +81,19 @@ def run(args):
     pos_weight = class_counts[0] / class_counts[1]
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
     loader_args = (args.data_root, image_size, args.batch_size, args.workers, seed)
-    train_loader = make_loader(data["train"], *loader_args, shuffle=True, device=device)
-    early_loader = make_loader(data["early_stop"], *loader_args, shuffle=False, device=device)
+    train_loader = make_loader(data["train"], *loader_args, shuffle=True, device=device,
+                               role="train", augmentation=augmentation)
+    early_loader = make_loader(data["early_stop"], *loader_args, shuffle=False, device=device,
+                               role="early_stop")
 
     config = {
-        "checkpoint_format_version": 1, "model_name": model_name,
+        "checkpoint_format_version": 2, "model_name": model_name,
         "initialization": "random", "pretrained_weights": None,
         "fold": args.fold, "seed": seed, "seed_base": args.seed,
         "image_size": list(image_size), "expected_slices": expected_slices,
         "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
-        "augmentation": "none", "aggregation": "mean_slice_AD_probability",
+        "augmentation": augmentation.name, "augmentation_config": augmentation.to_dict(),
+        "aggregation": "mean_slice_AD_probability",
         "threshold": 0.5, "calibration": "not_fitted",
         "checkpoint_selection": "minimum_early_stop_scan_log_loss",
         "manifest_sha256": data["manifest_sha256"],
@@ -106,7 +112,7 @@ def run(args):
         torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
     history, best_loss, patience_loss, stale_epochs, best_epoch = [], math.inf, math.inf, 0, 0
-    print(f"Training {model_name}, fold {args.fold} on {device}; "
+    print(f"Training {model_name}, augmentation={augmentation.name}, fold {args.fold} on {device}; "
           "selection uses early-stop scans only.", flush=True)
 
     for epoch in range(1, args.epochs + 1):
@@ -151,12 +157,14 @@ def run(args):
     # Outer validation is constructed/scored only after the checkpoint is fixed.
     selected = torch.load(output / "best.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(selected["model_state"])
-    validation_loader = make_loader(data["val"], *loader_args, shuffle=False, device=device)
+    validation_loader = make_loader(data["val"], *loader_args, shuffle=False, device=device,
+                                    role="val")
     scores, slices, scans = evaluate(model, validation_loader, device, expected_slices)
     sync_device(device)
     result = {
         "status": "complete", "evaluation_role": "development_outer_validation",
         "model_name": model_name,
+        "augmentation": augmentation.name,
         "fold": args.fold, "best_epoch": best_epoch, "epochs_completed": len(history),
         "best_early_stop_scan_loss": best_loss, "manifest_sha256": data["manifest_sha256"],
         "aggregation": config["aggregation"], "threshold": 0.5, "calibration": "not_fitted",
@@ -186,6 +194,12 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", choices=tuple(MODEL_CHOICES), default="small_cnn",
                         help="Fresh randomly initialized architecture (default: small_cnn).")
+    parser.add_argument("--augmentation", choices=AUGMENTATION_NAMES, default="none",
+                        help="Training images only: none or light rotation/translation (default: none).")
+    parser.add_argument("--rotation-degrees", type=float, default=5.0,
+                        help="Maximum absolute rotation for light augmentation, in degrees (default: 5).")
+    parser.add_argument("--translation-fraction", type=float, default=0.03,
+                        help="Maximum light translation as a fraction of each dimension (default: 0.03).")
     parser.add_argument("--fold", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=5)

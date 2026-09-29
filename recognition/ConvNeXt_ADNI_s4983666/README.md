@@ -2,50 +2,75 @@
 
 Patient-isolated MRI classification comparing Alzheimer's disease (AD) with normal controls (NC).
 
-The implementation audits the course JPEG dataset, creates five-fold cross-validation manifests, trains either a small CNN or a ConvNeXt-Tiny on one development fold, and reproduces held-out predictions from a saved checkpoint. Both architectures are implemented in PyTorch and initialized from random weights. Three complete five-fold CNN repetitions have been reviewed locally. ConvNeXt real-data experiments, final refitting, confidence calibration, and final-test evaluation remain future work.
+The implementation audits the course JPEG dataset, creates five-fold cross-validation manifests, trains either a small CNN or a ConvNeXt-Tiny on one development fold, and reproduces held-out predictions from a saved checkpoint. Both architectures are implemented in PyTorch and initialized from random weights. Three complete five-fold CNN repetitions have been reviewed locally. An initial unaugmented ConvNeXt fold has also completed; the optional training-augmentation variant remains to be evaluated on ADNI. Final refitting, confidence calibration, and final-test evaluation remain future work.
 
-This project lives at `recognition/ADNI_s4983666/` on the course fork's `topic-recognition` branch. The original three development commits were imported without squashing their history. Final coursework submission still requires a pull request to `shakes76/PatternAnalysis-2026`, targeting `topic-recognition`, and the accompanying report submission.
+This project lives at `recognition/ConvNeXt_ADNI_s4983666/` in the course fork, [54dK3n/PatternAnalysis-2026](https://github.com/54dK3n/PatternAnalysis-2026), on `topic-recognition`. Its package layout and current implementation were migrated from the standalone development project, [54dK3n/comp3710-adni](https://github.com/54dK3n/comp3710-adni). Final coursework submission still requires the course pull request and accompanying report; this migration does not claim completion of the remaining report or evaluation requirements.
 
-## Repository contents
+## Repository layout
 
-- `adni_splits.py`: source-data audit, patient-level partitioning, and independent manifest verification.
-- `dataset.py`: mandatory manifest verification and deterministic grayscale image loading.
-- `modules.py`: the small CNN, complete grayscale ConvNeXt-Tiny, and versioned model factory.
-- `train.py`: one-fold training, early stopping, checkpoint saving, and outer validation.
-- `predict.py`: reload a checkpoint and reproduce that fold's outer-validation predictions.
-- `metrics.py`: scan aggregation, per-class metrics, macro F1, AUROC, and log loss.
-- `training_utils.py`: reproducibility, inference, artifact output, and plotting helpers.
-- `tests/`: synthetic tests for splitting, loading, metrics, and actual CPU training/inference.
-- `DATA_PROTOCOL.md`: the full experimental protocol, including training-time safeguards.
-- `CONVNEXT_SMOKE_TEST.md`: local CPU test results and remaining server validation.
-- `requirements.txt`: the image-reading dependency for audit-only use.
-- `requirements-train.txt`: the reference training dependencies.
+The root contains only the three executable Python entry points and essential repository metadata (`README.md` and `.gitignore`). Implementations, dependencies, documentation, and tests have separate directories:
+
+```text
+ConvNeXt_ADNI_s4983666/
+├── train.py                 # Training CLI entry
+├── predict.py               # Checkpoint prediction CLI entry
+├── adni_splits.py           # Audit/prepare/verify CLI entry
+├── models/
+│   ├── cnn.py               # Original small CNN
+│   ├── convnext.py          # Complete grayscale ConvNeXt-Tiny
+│   └── registry.py          # CLI aliases and versioned checkpoint architectures
+├── dataset/
+│   ├── splits.py            # Source audit and patient-level split implementation
+│   ├── manifests.py         # Mandatory verification and frozen-fold loading
+│   ├── slices.py            # Digest-checked grayscale slice dataset
+│   ├── augmentation.py      # Versioned, training-only geometric transforms
+│   └── loaders.py           # Role-specific loaders and worker seeds
+├── engine/
+│   ├── training.py          # Optimization, early stopping, and outer validation
+│   └── prediction.py        # Checkpoint validation and reproduced predictions
+├── evaluation/
+│   ├── metrics.py           # Scan aggregation and classification metrics
+│   └── inference.py         # Evaluation-mode inference and timing
+├── utils/
+│   ├── runtime.py           # Devices, reproducibility, and environment records
+│   └── artifacts.py         # Fingerprints, CSV/JSON, protected outputs, and plots
+├── config/
+│   ├── requirements.txt
+│   └── requirements-train.txt
+├── docs/                    # Data protocol, smoke records, and local references
+├── tests/                   # Synthetic unit, integration, and CLI tests
+└── outputs/                 # Ignored local data/manifests/experiment artifacts
+```
+
+Each Python package also has an `__init__.py`. The former root implementation files `modules.py`, `dataset.py`, `metrics.py`, and `training_utils.py` have been replaced by these packages. Existing shell commands using the three entry scripts still work. Python callers should import implementations from their new packages, such as `models.create_model` and `dataset.manifests.load_fold`.
+
+The existing split and verification algorithms are unchanged, so frozen manifests remain usable. The target's M0 source audit is retained in the same package. Both models preserve their parameter names and computation. Version 1 CNN/ConvNeXt checkpoints remain supported; new version 2 checkpoints also record the complete training-augmentation configuration. Prediction always uses fixed validation processing.
 
 ## Setup
 
-Use Python 3.9 or newer in your project environment:
+Use Python 3.10 or newer in your project environment (required by the pinned Pillow version):
 
 ```bash
 git clone --branch topic-recognition https://github.com/54dK3n/PatternAnalysis-2026.git
-cd PatternAnalysis-2026/recognition/ADNI_s4983666
-python3 -m pip install -r requirements.txt
+cd PatternAnalysis-2026/recognition/ConvNeXt_ADNI_s4983666
+python3 -m pip install -r config/requirements.txt
 ```
 
-In an existing local checkout, enter `recognition/ADNI_s4983666/` before running the commands below.
+In an existing checkout, run the commands below from `recognition/ConvNeXt_ADNI_s4983666/`, which contains `train.py` and `README.md`.
 
 For training, install the additional dependencies in your project environment:
 
 ```bash
-python3 -m pip install -r requirements-train.txt
+python3 -m pip install -r config/requirements-train.txt
 ```
 
-The training requirements pin PyTorch 2.6.0 and Matplotlib 3.9.4. Local CPU verification used Python 3.12.14 and Pillow 12.3.0. GPU training requires a PyTorch CUDA build compatible with the server's driver; follow the [official PyTorch installation instructions](https://pytorch.org/get-started/locally/) or the course environment instructions. The code does not require torchvision or scikit-learn. Every training run records its actual package versions, CUDA build, and device information in `config.json`.
+The requirements pin Pillow 12.3.0 in `config/requirements.txt`, with PyTorch 2.6.0 and Matplotlib 3.9.4 added by `config/requirements-train.txt`. Local CPU verification used Python 3.12.14 and Pillow 12.3.0. GPU training requires a PyTorch CUDA build compatible with the server's driver; follow the [official PyTorch installation instructions](https://pytorch.org/get-started/locally/) or the course environment instructions. The code does not require torchvision or scikit-learn. Every training run records its actual package versions, CUDA build, and device information in `config.json`.
 
 The completed server baseline used Python 3.11.15, PyTorch 2.13.0, Pillow 12.3.0 and Matplotlib 3.11.1 on an NVIDIA A100-PCIE-40GB, with CUDA build 13.0. These recorded server versions differ from the local CPU reference environment above.
 
 ## Local workspace files
 
-The local migration also copies `outputs/`, the coursework PDF and the local `.venv/` into this project folder. They remain ignored by Git. Outputs include private split manifests, prediction records, checkpoints and local review reports; keep them outside all public commits. Historical paths inside experiment configurations remain unchanged because they record where those experiments actually ran. Recreate `.venv/` on a different machine rather than transferring its platform-specific packages.
+Local experiment outputs, datasets, model weights, the coursework PDF and `.venv/` remain outside version control. Outputs include private split manifests, prediction records, checkpoints and local review reports; keep them outside all public commits. Historical paths inside experiment configurations remain unchanged because they record where those experiments actually ran. Create a new virtual environment on each machine and install its dependencies locally.
 
 The dataset must be obtained separately through the course's authorised access. Expected layout:
 
@@ -62,6 +87,42 @@ ADNI/
 ```
 
 Source folder names record the supplied split, not the split to use for experiments. The supplied train/test folders share patients; the generated manifests replace those assignments without changing source images.
+
+## Source audit and preserved patient splits
+
+The existing M0 source audit remains available after moving its implementation
+into `dataset/splits.py`:
+
+```bash
+python3 adni_splits.py audit \
+  --data-root /home/groups/comp3710/ADNI \
+  --output runs/m0_audit
+```
+
+It prints the observed tree, supplied split/class counts, image sizes/channels,
+and filename-to-metadata patient examples, then writes `config.json` and
+`metrics.json` with `report_type: data_audit`. Existing output directories are
+never overwritten. `--expected-slices` defaults to 20; `--tree-depth` and
+`--examples` control the displayed inventory. An exit code of 1 means an input
+or source validation failure. Exit code 2 and `status: blocked` describe overlap
+in the **original supplied folders only**; they do not invalidate the separately
+verified patient manifests used by training. Exit code 0 means the original
+folder boundary also passed the audit.
+
+The current training protocol already isolates patients using frozen
+`adni_splits_v1` manifests. Migration preserves those assignments, seeds, image
+hashes, and verification logic; it does not regenerate a split. Continue to use
+`verify` on the existing server manifests before training. Images remain in
+their original folders, while the manifest rows determine their experimental
+roles. JPEG filenames encode scan and slice IDs; patient IDs come from the
+matching metadata filename.
+
+This migration transfers the existing CNN, ConvNeXt-Tiny, optional training
+augmentation, prediction, documentation, and tests into the package layout.
+It preserves the target's local outputs and environment. It does not perform
+new ADNI training or final-test evaluation, or implement the remaining model,
+calibration, report, or Slurm milestones. Historical experiment records retain
+the paths where those experiments actually ran.
 
 ## Prepare and verify the split
 
@@ -119,7 +180,7 @@ The sample standard deviation of fold accuracy is 12.33 percentage points, showi
 
 The baseline receives one grayscale slice and outputs an AD logit. Its four convolution blocks have 16, 32, 64, and 128 channels; each contains a 3×3 convolution, group normalization, ReLU, and 2×2 max pooling. A global spatial mean, dropout of 0.2, and a linear layer produce one logit. The model uses only PyTorch operations and starts from random weights.
 
-Default input size is height 240 × width 256, matching the supplied images. Pixel values use the fixed transform `(pixel / 255 - 0.5) / 0.5`; no population mean or standard deviation is estimated. There is no augmentation in this initial baseline. Each image is checked against its recorded file digest when loaded.
+Default input size is height 240 × width 256, matching the supplied images. Pixel values use the fixed transform `(pixel / 255 - 0.5) / 0.5`; no population mean or standard deviation is estimated. The initial baseline used no augmentation; the default remains `--augmentation none`. Each image is checked against its recorded file digest when loaded.
 
 Training uses AdamW with learning rate 0.001, weight decay 0.0001, and binary cross-entropy with logits. AD's positive loss weight is `NC training slices / AD training slices`, computed only from the current fold's training manifest. Sampling is uniform over training slices: patients with more scans contribute more examples. This weighting choice should be discussed when comparing models.
 
@@ -127,15 +188,49 @@ For each scan, average its 20 slice-level AD probabilities and classify it as AD
 
 After each epoch, evaluate only the early-stopping patients. Save every strict minimum of their **scan-level log loss**. Stop after 5 epochs without an improvement greater than 0.0001 relative to the last patience-reset value, up to 30 epochs by default. Reload the selected checkpoint and evaluate the complete outer-validation set once. Report scan-level accuracy, balanced accuracy, per-class precision/recall/F1, macro F1, AUROC, log loss, and a confusion matrix. Slice-level results are supplemental; they are not independent-patient results.
 
+## Select a model and training augmentation
+
+Run `python3 train.py --help` to see all options. Model selection and augmentation are independent:
+
+| CLI option | Meaning |
+|---|---|
+| `--model cnn` or `--model small_cnn` | Original small CNN; default is `small_cnn` |
+| `--model convnext` or `--model convnext_tiny` | Complete ConvNeXt-Tiny |
+| `--augmentation none` | Original deterministic images; default |
+| `--augmentation light` | Random rotation and translation on training slices only |
+| `--rotation-degrees 5` | Maximum absolute angle for the light profile; accepted range 0–15 degrees |
+| `--translation-fraction 0.03` | Maximum translation along each axis as a fraction of that dimension; accepted range 0–0.1 |
+
+The light profile samples angles uniformly in ±5 degrees and horizontal/vertical translations independently within ±3% by default. Bounds are fixed configuration values, not estimated using any patient data. Rotation and translation use one bilinear Pillow operation after fixed resizing and before intensity normalization. The image canvas stays the same size; transformed pixels outside it are discarded and exposed areas are filled with black. These conservative settings are an experimental choice, not a demonstrated improvement on ADNI. See [Pillow's transform reference](https://pillow.readthedocs.io/en/stable/reference/Image.html#PIL.Image.Image.rotate).
+
+Only a loader explicitly marked `train`, using development manifests, accepts nontrivial augmentation. Early-stop, outer-validation, calibration, test, and prediction roles reject it. Source bytes are checked before transformation, and source JPEGs are never modified. Each slice gets independently sampled transforms; no augmented files are created or redistributed across partitions.
+
+Augmentation uses a private random generator. Identical seeds, worker counts, package versions, and execution settings reproduce its stream; different epochs get fresh draws. It does not consume the model's dropout/stochastic-depth random stream. `config.json` records the profile, bounds, interpolation, fill, scope, and algorithm version. A narrowly scoped worker setup also prevents a known macOS/Python 3.12+ shared-memory shutdown issue; it does not change Linux worker behavior or random seeds. See [PyTorch issue #153050](https://github.com/pytorch/pytorch/issues/153050). Workers must also remain fixed when comparing exact run reproduction; see [PyTorch data-loader seeding](https://docs.pytorch.org/docs/2.6/data.html#randomness-in-multi-process-data-loading).
+
+For the next controlled ConvNeXt experiment, add the three augmentation options to the previous configuration and use a fresh output directory:
+
+```bash
+python3 train.py \
+  --model convnext --augmentation light \
+  --rotation-degrees 5 --translation-fraction 0.03 \
+  --data-root /home/groups/comp3710/ADNI \
+  --splits-dir "$HOME/comp3710/adni_splits_v1" \
+  --output "$HOME/comp3710/runs/convnext_aug_fold01" \
+  --fold 1 --epochs 30 --patience 5 --batch-size 16 --workers 4 --device cuda \
+  --lr 1e-4 --weight-decay 0.05 --seed 3710
+```
+
+For an initial server smoke run, use `--epochs 1` and a distinct output such as `convnext_aug_fold01_check`. The original unaugmented run is preserved for comparison. All new results remain development results; the frozen calibration and final-test sets are not used for this experiment.
+
 ## ConvNeXt-Tiny
 
 `--model convnext_tiny` selects the full Tiny architecture described by [Liu et al., A ConvNet for the 2020s (CVPR 2022)](https://arxiv.org/abs/2201.03545), with the block and downsampling design cross-checked against the [official PyTorch implementation](https://docs.pytorch.org/vision/0.21/_modules/torchvision/models/convnext.html). The project implements the components directly in PyTorch; torchvision and pretrained downloads are not required.
 
 The four stages have depths **3, 3, 9, 3** and channels **96, 192, 384, 768**. Blocks use a 7×7 depthwise convolution, channel-wise LayerNorm, a four-times-expanded linear/GELU projection, and a residual connection with LayerScale initialized to 0.000001. Per-example stochastic depth increases linearly from 0 to 0.1 across the 18 blocks and is disabled for evaluation. A stride-4 convolutional stem, three stride-2 downsampling layers, spatial averaging, LayerNorm, and a binary head complete the model. The MRI adaptation uses **one input channel and one output logit**, with 27,817,825 trainable parameters; the small CNN has 97,521.
 
-Both models receive the same fixed grayscale scaling and native 240×256 input. ConvNeXt needs at least 32 pixels in each dimension; dimensions need not be multiples of 32. No center crop, RGB conversion, data-dependent normalization, or external pretraining is used. Both models share the frozen manifests, training-only loss weights, early-stop selection, complete-scan averaging, and fixed 0.5 threshold. Every fold starts a new model and optimizer. `config.json` records the versioned architecture, initialization, hyperparameters, split fingerprint, and code fingerprints; checkpoint loading dispatches to the saved architecture and checks preprocessing.
+Both models receive the same fixed grayscale scaling and native 240×256 input; optional geometric augmentation applies only during training. ConvNeXt needs at least 32 pixels in each dimension; dimensions need not be multiples of 32. No center crop, RGB conversion, data-dependent normalization, or external pretraining is used. Both models share the frozen manifests, training-only loss weights, early-stop selection, complete-scan averaging, and fixed 0.5 threshold. Every fold starts a new model and optimizer. `config.json` records the versioned architecture, initialization, hyperparameters, split fingerprint, and code fingerprints; checkpoint loading dispatches to the saved architecture and checks preprocessing.
 
-Begin with one full-fold GPU smoke run on the server, using a new output directory:
+To reproduce the original unaugmented configuration, begin with one full-fold GPU smoke run on the server, using a new output directory:
 
 ```bash
 python3 train.py \
@@ -150,6 +245,10 @@ python3 train.py \
 For the initial full development experiment, use a fresh output directory such as `convnext_fold01`, `--epochs 30 --patience 5`, and otherwise keep these settings. These are starting settings, not a validated optimal training recipe. The explicitly specified learning rate and weight decay differ from the CNN baseline and must be reported in comparisons. CLI defaults remain the original CNN settings, so include these options for ConvNeXt. GPU memory use and runtime must be measured on the server before scheduling all five folds; changing batch size creates a new documented configuration.
 
 Reload a ConvNeXt checkpoint with the same prediction command used for the CNN, replacing only the checkpoint and output paths. No `--model` option is needed for prediction: the checkpoint identifies the architecture. Older `small_cnn_v1` checkpoints remain supported. Neither training nor inference offers calibration/final-test scoring at this development stage.
+
+The first unaugmented real-data ConvNeXt run (fold 1, seed base 3710) selected epoch 4 and stopped after epoch 9. Its scan accuracy was 66.82%, macro F1 0.6627, and AUROC 0.7429 on the same frozen fold where the initial CNN achieved 83.41%, 0.8339, and 0.9136. Training loss fell from 0.683 to 0.031 while early-stop scan loss had its minimum of 0.718 at epoch 4. These trends motivate testing augmentation; the losses use different evaluation units and cannot be directly subtracted. This single fold does not establish an overall architecture ranking.
+
+The [ConvNeXt experiment plan](docs/CONVNEXT_EXPERIMENT_PLAN.md) explains the implemented architecture, the subsequently reported augmented fold-1 result, supported observations versus untested explanations, and proposed controlled comparisons. Proposed model variants and tuning features in that plan are not yet implemented.
 
 ## Run the first fold
 
@@ -187,7 +286,7 @@ The full source and manifest audit runs automatically before every training or p
 | `val_scan_predictions.csv` | One aggregated prediction per outer-validation scan |
 | `metrics.json` | Completed-run marker, held-out metrics, selected epoch, and resource measurements |
 
-Training loss is class-weighted at slice level; early-stop loss is unweighted at scan level, so the two curves use different objectives. Resource output includes parameter count, total training/evaluation time, and peak allocated CUDA memory when available. Forward timing excludes loading and transfer; milliseconds per slice describe the configured batch size, not single-request latency. CPU runs report CUDA memory as `null`. Patient-clustered confidence intervals and a five-fold summary are not yet implemented.
+Training loss is class-weighted at slice level; early-stop loss is unweighted at scan level, so the two curves use different objectives. Resource output includes parameter count, total training/evaluation time, and peak allocated CUDA memory when available. Forward timing excludes loading and transfer; milliseconds per slice describe the configured batch size, not single-request latency. CPU runs report CUDA memory as `null`. Patient-clustered confidence intervals and automatic five-fold summary generation are not yet implemented.
 
 All run artifacts stay outside Git. Incomplete runs have no final `metrics.json`; inspect the error and use a new output directory when retrying.
 
@@ -213,7 +312,7 @@ The checkpoint determines its fold and preprocessing. A different manifest finge
 - Refit the selected model on development data using a previously specified training rule. Then freeze it, fit confidence/decision thresholds on calibration data, and freeze the complete pipeline before final testing.
 - Exact duplicate checks do not exhaustively detect near-duplicates, incorrect source patient identities, or leakage from upstream preprocessing. Manifest verification does not enforce future training-code behaviour.
 
-See [the full data protocol](DATA_PROTOCOL.md) for evaluation units, mixed longitudinal diagnoses, out-of-fold predictions, and uncertainty reporting.
+See [the full data protocol](docs/DATA_PROTOCOL.md) for evaluation units, mixed longitudinal diagnoses, out-of-fold predictions, and uncertainty reporting.
 
 ## Tests
 
@@ -227,7 +326,9 @@ ConvNeXt-specific tests also check native-resolution forward/backward execution,
 
 Tests cover patient isolation, fold coverage, reproducibility, missing or corrupt inputs, conflicting labels, duplicate content, modified manifests, modified sources, safe image loading, known metric values and ties, full-scan aggregation, checkpoint selection, and actual CPU training followed by identical checkpoint predictions. They use generated images and synthetic patients, not the ADNI dataset. They do not establish real-data model performance or GPU compatibility on the course server.
 
-The [ConvNeXt smoke-test record](CONVNEXT_SMOKE_TEST.md) documents the 57 passing tests and the separate 240×256 command-line training/reload check. Smoke-test scores on generated images are not ADNI performance results.
+The [ConvNeXt smoke-test record](docs/CONVNEXT_SMOKE_TEST.md) documents the 57 passing tests and the separate 240×256 command-line training/reload check. Smoke-test scores on generated images are not ADNI performance results.
+
+The package layout and training-only augmentation are covered by the additional [refactor smoke-test record](docs/REFACTOR_SMOKE_TEST.md).
 
 ## Artificial Intelligence Usage Disclosure
 

@@ -1,47 +1,12 @@
-"""Randomly initialized grayscale classifiers implemented with PyTorch only.
+"""Native PyTorch ConvNeXt-Tiny with a grayscale stem and binary AD/NC output.
 
-ConvNeXt follows the architecture in Liu et al., "A ConvNet for the 2020s":
+Architecture: Liu et al., "A ConvNet for the 2020s":
 https://arxiv.org/abs/2201.03545 . The authors' reference implementation is
 https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py .
-This implementation uses a one-channel stem and a single binary logit for AD/NC.
 """
 
 import torch
 from torch import nn
-
-
-MODEL_NAMES = ("small_cnn_v1", "convnext_tiny_v1")
-
-
-class SmallCNN(nn.Module):
-    """Map one grayscale slice to an uncalibrated AD logit.
-
-    Group normalization has no running population statistics. Evaluation still
-    explicitly switches to eval mode to disable dropout. Global spatial means
-    support different image sizes without learning from validation images.
-    """
-
-    def __init__(self):
-        super().__init__()
-        layers = []
-        in_channels = 1
-        for out_channels in (16, 32, 64, 128):
-            layers.extend([
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-                nn.GroupNorm(4, out_channels),
-                nn.ReLU(),
-                nn.MaxPool2d(2),
-            ])
-            in_channels = out_channels
-        self.features = nn.Sequential(*layers)
-        self.classifier = nn.Sequential(nn.Dropout(0.2), nn.Linear(128, 1))
-
-    def forward(self, images):
-        """Return one logit per slice; BCEWithLogitsLoss applies sigmoid internally."""
-        if images.ndim != 4 or images.shape[1] != 1 or min(images.shape[-2:]) < 16:
-            raise ValueError("Expected [batch, 1, height, width] with height/width >= 16.")
-        features = self.features(images).mean(dim=(2, 3))
-        return self.classifier(features).squeeze(1)
 
 
 class LayerNorm2d(nn.LayerNorm):
@@ -147,26 +112,3 @@ class ConvNeXtTiny(nn.Module):
             features = stage(downsample(features))
         pooled = self.final_norm(features.mean(dim=(2, 3)))
         return self.classifier(pooled).squeeze(1)
-
-
-def model_minimum_size(name):
-    """Return the minimum supported height and width for a versioned model name."""
-    if name == "small_cnn_v1":
-        return 16
-    if name == "convnext_tiny_v1":
-        return 32
-    raise ValueError(f"Unsupported model name: {name}")
-
-
-def create_model(name):
-    """Construct a fresh model; training folds must never reuse another fold's weights."""
-    if name == "small_cnn_v1":
-        return SmallCNN()
-    if name == "convnext_tiny_v1":
-        return ConvNeXtTiny()
-    raise ValueError(f"Unsupported model name: {name}")
-
-
-def count_parameters(model):
-    """Count trainable scalar parameters for resource reporting."""
-    return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)

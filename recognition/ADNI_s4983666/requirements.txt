@@ -1,2 +1,0 @@
-# JPEG decoding and exact-pixel duplicate checks.
-Pillow>=10.0

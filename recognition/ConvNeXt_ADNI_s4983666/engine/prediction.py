@@ -11,9 +11,13 @@ import sys
 
 import torch
 
-from dataset import load_fold
-from modules import MODEL_NAMES, create_model, model_minimum_size
-from training_utils import evaluate, make_loader, seed_everything, select_device, validate_output, write_csv, write_json
+from dataset.augmentation import AugmentationConfig
+from dataset.loaders import make_loader
+from dataset.manifests import load_fold
+from evaluation.inference import evaluate
+from models import MODEL_NAMES, create_model, model_minimum_size
+from utils.artifacts import validate_output, write_csv, write_json
+from utils.runtime import seed_everything, select_device
 
 
 def run(args):
@@ -23,13 +27,20 @@ def run(args):
     output = validate_output(args.output, args.data_root, args.splits_dir)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     config = checkpoint["config"]
-    if config["checkpoint_format_version"] != 1 or config["model_name"] not in MODEL_NAMES:
+    if config["checkpoint_format_version"] not in (1, 2) or config["model_name"] not in MODEL_NAMES:
         raise ValueError("Unsupported checkpoint format or model architecture.")
     if config["aggregation"] != "mean_slice_AD_probability" or config["threshold"] != 0.5:
         raise ValueError("Unsupported aggregation or decision rule.")
     if (config["normalization"] != "(grayscale_uint8 / 255 - 0.5) / 0.5"
-            or config["augmentation"] != "none" or config["calibration"] != "not_fitted"):
+            or config["calibration"] != "not_fitted"):
         raise ValueError("Unsupported checkpoint preprocessing or calibration.")
+    if config["checkpoint_format_version"] == 1:
+        if config["augmentation"] != "none":
+            raise ValueError("Legacy checkpoints support only unaugmented training.")
+    else:
+        augmentation = AugmentationConfig.from_dict(config["augmentation_config"])
+        if augmentation.name != config["augmentation"]:
+            raise ValueError("Checkpoint augmentation name and configuration disagree.")
     image_size = config["image_size"]
     minimum_size = model_minimum_size(config["model_name"])
     if (not isinstance(image_size, (list, tuple)) or len(image_size) != 2
@@ -47,7 +58,7 @@ def run(args):
     model = create_model(config["model_name"]).to(device)
     model.load_state_dict(checkpoint["model_state"])
     loader = make_loader(data["val"], args.data_root, tuple(image_size),
-                         args.batch_size, args.workers, config["seed"], False, device)
+                         args.batch_size, args.workers, config["seed"], False, device, role="val")
     scores, slices, scans = evaluate(model, loader, device, config["expected_slices"])
     output.mkdir(parents=True, exist_ok=False)
     write_csv(output / "slice_predictions.csv", slices)

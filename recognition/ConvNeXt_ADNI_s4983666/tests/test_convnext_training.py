@@ -13,9 +13,9 @@ from unittest import mock
 
 import torch
 
-import predict
-import train
-from modules import create_model
+from engine import prediction as predict
+from engine import training as train
+from models import create_model
 import test_adni_splits as split_fixture
 
 
@@ -85,8 +85,8 @@ class ConvNeXtTrainingTests(unittest.TestCase):
                 scores["scan"]["log_loss"] = 0.6 if len(evaluation_calls) == 1 else 0.8
             return scores, slices, scans
 
-        with mock.patch("train.make_loader", side_effect=observed_loader), \
-                mock.patch("train.evaluate", side_effect=observed_evaluate), \
+        with mock.patch("engine.training.make_loader", side_effect=observed_loader), \
+                mock.patch("engine.training.evaluate", side_effect=observed_evaluate), \
                 contextlib.redirect_stdout(io.StringIO()):
             result = train.run(self.args)
 
@@ -145,7 +145,7 @@ class ConvNeXtTrainingTests(unittest.TestCase):
             prediction_loaders.append("val")
             return real_make_loader(manifest_rows, *args, **kwargs)
 
-        with mock.patch("predict.make_loader", side_effect=prediction_loader), \
+        with mock.patch("engine.prediction.make_loader", side_effect=prediction_loader), \
                 contextlib.redirect_stdout(io.StringIO()):
             predict.run(prediction_args)
         reproduced = json.loads((prediction_dir / "metrics.json").read_text())
@@ -155,12 +155,26 @@ class ConvNeXtTrainingTests(unittest.TestCase):
         self.assertEqual(split_fixture.read_csv(prediction_dir / "scan_predictions.csv"), scan_rows)
         self.assertEqual(split_fixture.read_csv(prediction_dir / "slice_predictions.csv"), slice_rows)
 
+        # Format 1 used the same versioned model and fixed preprocessing, but
+        # did not contain the new, explicit training-augmentation metadata.
+        legacy = torch.load(self.output / "best.pt", map_location="cpu", weights_only=True)
+        legacy["config"]["checkpoint_format_version"] = 1
+        del legacy["config"]["augmentation_config"]
+        legacy_path = self.fixture.base / "legacy_convnext.pt"
+        torch.save(legacy, legacy_path)
+        del legacy
+        prediction_args.checkpoint = legacy_path
+        prediction_args.output = self.fixture.base / "legacy_prediction"
+        with contextlib.redirect_stdout(io.StringIO()):
+            predict.run(prediction_args)
+        self.assertEqual(split_fixture.read_csv(prediction_args.output / "scan_predictions.csv"), scan_rows)
+
     def test_invalid_model_or_resolution_stops_before_data_loading(self):
         for model, height, width in (("unknown", 32, 32), ("convnext_tiny", 31, 32),
                                      ("convnext_tiny", 32, 31)):
             with self.subTest(model=model, height=height, width=width):
                 self.args.model, self.args.image_height, self.args.image_width = model, height, width
-                with mock.patch("train.load_fold") as load_fold, self.assertRaises(ValueError):
+                with mock.patch("engine.training.load_fold") as load_fold, self.assertRaises(ValueError):
                     train.run(self.args)
                 load_fold.assert_not_called()
                 self.assertFalse(self.output.exists())
@@ -168,7 +182,7 @@ class ConvNeXtTrainingTests(unittest.TestCase):
     def test_modified_manifest_stops_before_model_construction(self):
         path = self.fixture.out / "fold_01/train.csv"
         path.write_text(path.read_text() + "unexpected,row\n")
-        with mock.patch("train.create_model") as create, \
+        with mock.patch("engine.training.create_model") as create, \
                 contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, "modified"):
             train.run(self.args)
         create.assert_not_called()
@@ -194,7 +208,7 @@ class ConvNeXtTrainingTests(unittest.TestCase):
                 config = dict(valid_config)
                 config[field] = value
                 torch.save({"config": config, "model_state": {}}, checkpoint)
-                with mock.patch("predict.load_fold") as load_fold, self.assertRaises(ValueError):
+                with mock.patch("engine.prediction.load_fold") as load_fold, self.assertRaises(ValueError):
                     predict.run(args)
                 load_fold.assert_not_called()
                 self.assertFalse(self.output.exists())
@@ -217,7 +231,7 @@ class ConvNeXtTrainingTests(unittest.TestCase):
             splits_dir=self.fixture.out, output=self.output,
             batch_size=16, workers=0, threads=1, device="cpu",
         )
-        with mock.patch("predict.make_loader") as loader, \
+        with mock.patch("engine.prediction.make_loader") as loader, \
                 contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "state_dict"):
             predict.run(args)
         loader.assert_not_called()

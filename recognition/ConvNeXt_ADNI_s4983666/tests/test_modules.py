@@ -5,8 +5,8 @@ import unittest
 import torch
 from torch import nn
 
-from modules import (
-    MODEL_NAMES, ConvNeXtBlock, ConvNeXtTiny, LayerNorm2d, SmallCNN,
+from models import (
+    MODEL_CHOICES, MODEL_NAMES, ConvNeXtBlock, ConvNeXtTiny, LayerNorm2d, SmallCNN,
     StochasticDepth, count_parameters, create_model, model_minimum_size,
 )
 
@@ -81,6 +81,11 @@ class ModelTests(unittest.TestCase):
 
     def test_factories_keep_baseline_initialization_and_use_independent_models(self):
         self.assertEqual(MODEL_NAMES, ("small_cnn_v1", "convnext_tiny_v1"))
+        self.assertEqual(MODEL_CHOICES, {
+            "small_cnn": "small_cnn_v1", "cnn": "small_cnn_v1",
+            "convnext_tiny": "convnext_tiny_v1", "convnext": "convnext_tiny_v1",
+        })
+        self.assertEqual(set(MODEL_CHOICES.values()), set(MODEL_NAMES))
         torch.manual_seed(3710)
         old_baseline = SmallCNN()
         torch.manual_seed(3710)
