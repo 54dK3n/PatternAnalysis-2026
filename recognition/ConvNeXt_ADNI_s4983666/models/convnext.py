@@ -69,10 +69,15 @@ class ConvNeXtTiny(nn.Module):
 
     depths = (3, 3, 9, 3)
     channels = (96, 192, 384, 768)
+    stem_kernel = 4
+    stem_stride = 4
+    stem_padding = 0
+    max_drop_path = 0.1
 
     def __init__(self):
         super().__init__()
-        self.stem = nn.Sequential(nn.Conv2d(1, self.channels[0], 4, stride=4),
+        self.stem = nn.Sequential(nn.Conv2d(1, self.channels[0], self.stem_kernel,
+                                             stride=self.stem_stride, padding=self.stem_padding),
                                   LayerNorm2d(self.channels[0]))
         self.downsample_layers = nn.ModuleList([
             nn.Sequential(LayerNorm2d(previous), nn.Conv2d(previous, current, 2, stride=2))
@@ -83,7 +88,7 @@ class ConvNeXtTiny(nn.Module):
         for channels, depth in zip(self.channels, self.depths):
             blocks = []
             for _ in range(depth):
-                probability = 0.1 * block_index / (sum(self.depths) - 1)
+                probability = self.max_drop_path * block_index / (sum(self.depths) - 1)
                 blocks.append(ConvNeXtBlock(channels, probability))
                 block_index += 1
             self.stages.append(nn.Sequential(*blocks))
@@ -112,3 +117,35 @@ class ConvNeXtTiny(nn.Module):
             features = stage(downsample(features))
         pooled = self.final_norm(features.mean(dim=(2, 3)))
         return self.classifier(pooled).squeeze(1)
+
+
+class ConvNeXtLite(ConvNeXtTiny):
+    """Smaller scratch ConvNeXt retaining Tiny's block and downsampling design.
+
+    This is a separate checkpoint architecture; Tiny's names and tensor shapes
+    are unchanged. Depths (2, 2, 6, 2) and channels (48, 96, 192, 384) reduce
+    resource demand. Real-data results are recorded separately from this definition.
+    """
+
+    depths = (2, 2, 6, 2)
+    channels = (48, 96, 192, 384)
+
+
+class ConvNeXtLiteOverlap(ConvNeXtLite):
+    """Scratch Lite with an overlapping 7x7, stride-four, padded stem."""
+
+    stem_kernel = 7
+    stem_padding = 3
+
+
+class ConvNeXtLiteStride2(ConvNeXtLite):
+    """Scratch Lite retaining more spatial samples using a stride-two stem."""
+
+    stem_stride = 2
+    stem_padding = 1
+
+
+class ConvNeXtLiteNoDrop(ConvNeXtLite):
+    """Scratch Lite with stochastic depth disabled at every block."""
+
+    max_drop_path = 0.0

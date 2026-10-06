@@ -5,9 +5,10 @@ import random
 import sys
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .slices import ADNISliceDataset
+from .sampling import sampling_weights
 
 
 def _prevent_macos_tracker_inheritance():
@@ -31,16 +32,26 @@ def seed_worker(worker_id):
 
 
 def make_loader(rows, data_root, image_size, batch_size, workers, seed, shuffle, device,
-                *, role="evaluation", augmentation=None):
+                *, role="evaluation", augmentation=None, sampling="slice_uniform",
+                preprocessing=None, scan_parameters=None):
     """Keep all samples and apply only the explicitly requested role's transforms.
 
     Shuffling never enables augmentation. The original loader generator and
     worker seeding are unchanged when the augmentation profile is none.
     """
+    sampler = None
+    if sampling != "slice_uniform":
+        if role != "train" or not shuffle:
+            raise ValueError("Balanced sampling is permitted only for shuffled training.")
+        weights, _ = sampling_weights(rows, sampling)
+        sampler = WeightedRandomSampler(weights, len(rows), replacement=True,
+                                        generator=torch.Generator().manual_seed(seed + 1000003))
+        shuffle = False
     return DataLoader(
         ADNISliceDataset(rows, data_root, image_size=image_size, role=role,
-                         augmentation=augmentation, augmentation_seed=seed),
-        batch_size=batch_size, shuffle=shuffle, drop_last=False, num_workers=workers,
+                         augmentation=augmentation, augmentation_seed=seed,
+                         preprocessing=preprocessing, scan_parameters=scan_parameters),
+        batch_size=batch_size, shuffle=shuffle, sampler=sampler, drop_last=False, num_workers=workers,
         pin_memory=device.type == "cuda", worker_init_fn=seed_worker,
         generator=torch.Generator().manual_seed(seed),
     )

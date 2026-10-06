@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, get_worker_info
 
 from . import splits as adni_splits
 from .augmentation import AugmentationConfig, augment_image
+from .preprocessing import (PreprocessingConfig, apply_preprocessing, prepare_scans,
+                            validate_scan_parameters)
 
 
 class ADNISliceDataset(Dataset):
@@ -21,7 +23,7 @@ class ADNISliceDataset(Dataset):
     """
 
     def __init__(self, rows, data_root, image_size=(240, 256), *, role="evaluation",
-                 augmentation=None, augmentation_seed=0):
+                 augmentation=None, augmentation_seed=0, preprocessing=None, scan_parameters=None):
         self.data_root = Path(data_root).resolve()
         adni_splits.require(self.data_root.is_dir(), f"Missing data directory: {self.data_root}")
         adni_splits.require(len(image_size) == 2 and all(type(n) is int and n > 0 for n in image_size),
@@ -43,6 +45,9 @@ class ADNISliceDataset(Dataset):
                                 "Augmentation requires development training manifests.")
         self._augmentation_rng = None
         self._augmentation_worker = None
+        self.preprocessing = PreprocessingConfig() if preprocessing is None else preprocessing
+        adni_splits.require(isinstance(self.preprocessing, PreprocessingConfig),
+                            "preprocessing must be a PreprocessingConfig.")
         self.paths = []
         seen_paths, seen_resolved_paths, seen_slices = set(), set(), set()
         scan_owners = {}
@@ -80,6 +85,12 @@ class ADNISliceDataset(Dataset):
             seen_slices.add(scan_key)
             self.paths.append(resolved)
 
+        self.scan_parameters = {}
+        if self.preprocessing.name != "none":
+            self.scan_parameters = (prepare_scans(self.rows, self.data_root, self.preprocessing)
+                                    if scan_parameters is None else scan_parameters)
+            validate_scan_parameters(self.rows, self.scan_parameters, self.preprocessing)
+
     def __len__(self):
         return len(self.rows)
 
@@ -104,7 +115,10 @@ class ADNISliceDataset(Dataset):
         with Image.open(io.BytesIO(content)) as source:
             image = ImageOps.exif_transpose(source).convert("L")
             target_size = (self.image_size[1], self.image_size[0])
-            if image.size != target_size:
+            if self.preprocessing.name != "none":
+                image = apply_preprocessing(image, self.scan_parameters[row["image_id"]],
+                                            self.preprocessing, self.image_size)
+            elif image.size != target_size:
                 image = image.resize(target_size, resample=Image.Resampling.BILINEAR)
             if self.augmentation.name != "none":
                 image = augment_image(image, self.augmentation, self._rng())
