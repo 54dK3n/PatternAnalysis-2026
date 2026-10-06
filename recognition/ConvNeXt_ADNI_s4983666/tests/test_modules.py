@@ -80,12 +80,15 @@ class ModelTests(unittest.TestCase):
                     model(images)
 
     def test_factories_keep_baseline_initialization_and_use_independent_models(self):
-        self.assertEqual(MODEL_NAMES, ("small_cnn_v1", "convnext_tiny_v1"))
+        self.assertEqual(MODEL_NAMES[:3], ("small_cnn_v1", "convnext_tiny_v1", "convnext_lite_v1"))
+        self.assertEqual(MODEL_NAMES[3:], ("convnext_lite_overlap_v1", "convnext_lite_stride2_v1",
+                                         "convnext_lite_nodrop_v1"))
         self.assertEqual(MODEL_CHOICES, {
             "small_cnn": "small_cnn_v1", "cnn": "small_cnn_v1",
             "convnext_tiny": "convnext_tiny_v1", "convnext": "convnext_tiny_v1",
+            "convnext_lite": "convnext_lite_v1",
         })
-        self.assertEqual(set(MODEL_CHOICES.values()), set(MODEL_NAMES))
+        self.assertEqual(set(MODEL_CHOICES.values()), set(MODEL_NAMES[:3]))
         torch.manual_seed(3710)
         old_baseline = SmallCNN()
         torch.manual_seed(3710)

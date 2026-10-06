@@ -24,7 +24,7 @@ def write_csv(path, rows):
 def code_fingerprints():
     """Identify the exact source files used, even outside a Git checkout."""
     root = Path(__file__).resolve().parents[1]
-    sources = [root / name for name in ("adni_splits.py", "train.py", "predict.py")]
+    sources = [root / name for name in ("adni_splits.py", "train.py", "predict.py", "modules.py", "dataset.py", "audit_preprocessing.py")]
     for package in ("models", "dataset", "engine", "evaluation", "utils"):
         sources.extend((root / package).rglob("*.py"))
     return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -49,13 +49,19 @@ def plot_history(output, history):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     epochs = [row["epoch"] for row in history]
-    figure, axes = plt.subplots(1, 2, figsize=(10, 4), layout="constrained")
+    figure, axes = plt.subplots(1, 3, figsize=(14, 4), layout="constrained")
     axes[0].plot(epochs, [r["train_slice_loss"] for r in history], marker="o", label="Train slice BCE (class-weighted)")
     axes[0].plot(epochs, [r["early_stop_scan_loss"] for r in history], marker="o", label="Early-stop scan log loss")
     axes[0].set(xlabel="Epoch", ylabel="Loss", title="Training and checkpoint selection")
     axes[1].plot(epochs, [r["early_stop_scan_accuracy"] for r in history], marker="o", label="Scan accuracy")
     axes[1].plot(epochs, [r["early_stop_scan_macro_f1"] for r in history], marker="o", label="Scan macro F1")
-    axes[1].set(xlabel="Epoch", ylabel="Score", ylim=(0, 1), title="Early-stop patients only")
+    axes[1].set(xlabel="Epoch", ylabel="Score", ylim=(0, 1), title="Training / early-stop scores")
+    if "early_stop_slice_accuracy" in history[0]:
+        axes[1].plot(epochs, [r["train_slice_accuracy"] for r in history], marker="o", label="Online train slice accuracy")
+        axes[1].plot(epochs, [r["early_stop_slice_accuracy"] for r in history], marker="o", label="Early-stop slice accuracy")
+        axes[2].plot(epochs, [r["train_slice_auroc"] for r in history], marker="o", label="Online train slice AUROC")
+        axes[2].plot(epochs, [r["early_stop_slice_auroc"] for r in history], marker="o", label="Early-stop slice AUROC")
+    axes[2].set(xlabel="Epoch", ylabel="AUROC", ylim=(0, 1), title="Slice discrimination")
     for axis in axes:
         axis.grid(alpha=0.2)
         axis.legend(fontsize=8)

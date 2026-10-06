@@ -1,4 +1,6 @@
-"""Train a fresh classifier on one frozen development fold and evaluate outer val once.
+"""Train from scratch on a frozen fold; default evaluation scores outer val once.
+
+Use --inner-only for exploratory early-stop scoring without outer validation.
 
 The calibration and final-test sets are used only by the source integrity audit;
 their images/labels never enter training, checkpoint selection, or model scoring.
@@ -15,29 +17,44 @@ import torch
 from torch import nn
 
 from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
-from dataset.loaders import make_loader
-from dataset.manifests import load_fold
+from dataset.preprocessing import (SCAN_NORMALIZATION, add_preprocessing_arguments,
+                                   fit_training_crop, prepare_scans, preprocessing_from_args)
+from utils.preprocessing_artifacts import export_preprocessing_audit
+from dataset import make_loader, load_fold
+from dataset.sampling import SAMPLING_NAMES, sampling_weights
+from engine.scheduling import learning_rate
 from evaluation.inference import evaluate
-from models import MODEL_CHOICES, create_model, count_parameters, model_minimum_size
+from evaluation.metrics import binary_metrics
+from evaluation.reporting import prediction_report
+from evaluation.resources import cuda_peak_mib, profile_inference
+from utils.evaluation_artifacts import export_evaluation_artifacts
+from modules import MODEL_CHOICES, create_model, count_parameters, model_minimum_size
 from utils.artifacts import code_fingerprints, plot_history, validate_output, write_csv, write_json
 from utils.runtime import environment_info, seed_everything, select_device, sync_device
 
 
-def train_epoch(model, loader, optimizer, criterion, device):
+def train_epoch(model, loader, optimizer, criterion, device, metrics_sink=None):
     """Update weights using only training slices and fail on non-finite loss."""
     model.train()
     total_loss, count = 0.0, 0
+    observed_labels, observed_probabilities = [], []
     for batch in loader:
         images = batch["image"].to(device, non_blocking=device.type == "cuda")
         labels = batch["label"].to(device, non_blocking=device.type == "cuda")
         optimizer.zero_grad(set_to_none=True)
-        loss = criterion(model(images), labels)
+        logits = model(images)
+        loss = criterion(logits, labels)
         if not torch.isfinite(loss).item():
             raise ValueError("Training produced non-finite loss; no evaluation will be published.")
         loss.backward()
         optimizer.step()
         total_loss += loss.detach().item() * labels.numel()
         count += labels.numel()
+        if metrics_sink is not None:
+            observed_labels.extend(int(v) for v in labels.detach().cpu().tolist())
+            observed_probabilities.extend(torch.sigmoid(logits.detach()).cpu().tolist())
+    if metrics_sink is not None:
+        metrics_sink.update(binary_metrics(observed_labels, observed_probabilities))
     return total_loss / count
 
 
@@ -53,6 +70,7 @@ def run(args):
         getattr(args, "augmentation", "none"),
         rotation_degrees=getattr(args, "rotation_degrees", 5.0),
         translation_fraction=getattr(args, "translation_fraction", 0.03),
+        translation_pixels=getattr(args, "translation_pixels", 4),
     )
     if args.epochs < 1 or args.patience < 1 or args.batch_size < 1 or args.workers < 0 or args.threads < 1:
         raise ValueError("Epochs, patience, batch size, and threads must be positive; workers cannot be negative.")
@@ -63,6 +81,23 @@ def run(args):
     if args.lr <= 0 or args.weight_decay < 0 or args.min_delta < 0:
         raise ValueError("Learning rate must be positive; weight decay and min delta cannot be negative.")
 
+    bins = getattr(args, "calibration_bins", 15)
+    reject_threshold = getattr(args, "reject_threshold", 0.8)
+    inner_only = getattr(args, "inner_only", False)
+    profile_warmup = getattr(args, "profile_warmup", 10)
+    profile_repeats = getattr(args, "profile_repeats", 100)
+    if type(bins) is not int or bins < 1 or not math.isfinite(reject_threshold) or not 0.5 <= reject_threshold <= 1:
+        raise ValueError("Calibration bins must be positive and rejection confidence must be in [0.5, 1].")
+    if min(profile_warmup, profile_repeats) < 1:
+        raise ValueError("Profile warmup and repeats must be positive.")
+    sampling_name = getattr(args, "sampling", "slice_uniform")
+    if sampling_name not in SAMPLING_NAMES:
+        raise ValueError("Unsupported training sampling mode.")
+    schedule_name = getattr(args, "lr_schedule", "constant")
+    warmup_epochs = getattr(args, "warmup_epochs", 2)
+    min_lr_ratio = getattr(args, "min_lr_ratio", 0.01)
+    learning_rate(1, args.epochs, args.lr, schedule_name, warmup_epochs, min_lr_ratio)
+    preprocessing = preprocessing_from_args(args)
     output = validate_output(args.output, args.data_root, args.splits_dir)
     data = load_fold(args.data_root, args.splits_dir, args.fold)
     expected_slices = int(data["report"]["config"]["expected_slices"])
@@ -71,23 +106,48 @@ def run(args):
     torch.set_num_threads(args.threads)
     device = select_device(args.device)
     image_size = (args.image_height, args.image_width)
+    preprocessing_started = time.perf_counter()
+    train_scan_parameters = None
+    crop_fit = {"status": "not_required"}
+    if preprocessing.name != "none":
+        train_scan_parameters = prepare_scans(data["train"], args.data_root, preprocessing)
+        preprocessing, crop_fit = fit_training_crop(train_scan_parameters, preprocessing,
+                                                    role="train", minimum_size=minimum_size)
+        if preprocessing.crops:
+            image_size = (preprocessing.crop_height, preprocessing.crop_width)
 
+    preprocessing_seconds = time.perf_counter() - preprocessing_started
     # No resume option: every run/fold creates an independent model and optimizer.
     model = create_model(model_name).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     class_counts = Counter(int(row["label"]) for row in data["train"])
     if class_counts[0] == 0 or class_counts[1] == 0:
         raise ValueError("Training must contain both AD and NC slices.")
-    pos_weight = class_counts[0] / class_counts[1]
+    _, sampling_config = sampling_weights(data["train"], sampling_name)
+    # Balancing both the sampler and the loss would apply the class correction twice.
+    pos_weight = class_counts[0] / class_counts[1] if sampling_name == "slice_uniform" else 1.0
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
+    loaders_started = time.perf_counter()
     loader_args = (args.data_root, image_size, args.batch_size, args.workers, seed)
     train_loader = make_loader(data["train"], *loader_args, shuffle=True, device=device,
-                               role="train", augmentation=augmentation)
+                               role="train", augmentation=augmentation, sampling=sampling_name,
+                               preprocessing=preprocessing, scan_parameters=train_scan_parameters)
     early_loader = make_loader(data["early_stop"], *loader_args, shuffle=False, device=device,
-                               role="early_stop")
+                               role="early_stop", preprocessing=preprocessing)
 
+    preprocessing_seconds += time.perf_counter() - loaders_started
     config = {
-        "checkpoint_format_version": 2, "model_name": model_name,
+        "checkpoint_format_version": 2, "metrics_format_version": 3, "model_name": model_name,
+        "model_architecture": {"depths": list(model.depths), "channels": list(model.channels)}
+        if hasattr(model, "depths") else {"name": model_name},
+        "primary_evaluation_unit": "slice", "patient_separation": "frozen_patient_manifests",
+        "evaluation_mode": "inner_only" if inner_only else "outer_validation_once",
+        "calibration_bins": bins, "reject_threshold": reject_threshold,
+        "rejection_threshold_source": "declared_before_evaluation_not_fitted",
+        "epoch_budget_source": "experiment_configuration_not_course_requirement",
+        "inference_profile": {"enabled": not getattr(args, "skip_inference_profile", False),
+                              "on_cpu": getattr(args, "profile_on_cpu", False),
+                              "batch_sizes": [1, 64], "warmup": profile_warmup, "repeats": profile_repeats},
         "initialization": "random", "pretrained_weights": None,
         "fold": args.fold, "seed": seed, "seed_base": args.seed,
         "image_size": list(image_size), "expected_slices": expected_slices,
@@ -102,23 +162,50 @@ def run(args):
         "train_pos_weight": pos_weight,
         "epochs_limit": args.epochs, "patience": args.patience, "min_delta": args.min_delta,
         "lr": args.lr, "weight_decay": args.weight_decay,
+        "lr_schedule": {"name": schedule_name, "warmup_epochs": warmup_epochs if schedule_name != "constant" else 0,
+                        "min_lr_ratio": min_lr_ratio if schedule_name != "constant" else 1.0},
+        "training_sampling": sampling_config,
         "batch_size": args.batch_size, "workers": args.workers, "threads": args.threads,
         "data_root": str(args.data_root.resolve()), "splits_dir": str(args.splits_dir.resolve()),
         "code_sha256": code_fingerprints(), "environment": environment_info(device),
     }
+    if preprocessing.name != "none":
+        config.update(checkpoint_format_version=3, normalization=SCAN_NORMALIZATION,
+                      preprocessing_config=preprocessing.to_dict(), preprocessing_crop_fit=crop_fit,
+                      preprocessing_preparation_seconds=preprocessing_seconds)
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "config.json", config)
+    preprocessing_audits = {}
+    if preprocessing.name != "none":
+        preprocessing_audits = {role: export_preprocessing_audit(output, loader.dataset, role)
+                                for role, loader in (("train", train_loader), ("early_stop", early_loader))}
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     started = time.perf_counter()
     history, best_loss, patience_loss, stale_epochs, best_epoch = [], math.inf, math.inf, 0, 0
+    epoch_metrics = []
+    training_peak = evaluation_peak = 0.0 if device.type == "cuda" else None
     print(f"Training {model_name}, augmentation={augmentation.name}, fold {args.fold} on {device}; "
           "selection uses early-stop scans only.", flush=True)
 
     for epoch in range(1, args.epochs + 1):
+        epoch_lr = learning_rate(epoch, args.epochs, args.lr, schedule_name, warmup_epochs, min_lr_ratio)
+        for group in optimizer.param_groups:
+            group["lr"] = epoch_lr
+        sync_device(device)
         epoch_started = time.perf_counter()
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
+        online_metrics = {}
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, online_metrics)
+        sync_device(device)
+        train_seconds = time.perf_counter() - epoch_started
+        if device.type == "cuda":
+            training_peak = max(training_peak, cuda_peak_mib(device))
+            torch.cuda.reset_peak_memory_stats(device)
         early_scores, _, _ = evaluate(model, early_loader, device, expected_slices)
+        if device.type == "cuda":
+            evaluation_peak = max(evaluation_peak, cuda_peak_mib(device))
         scan_scores = early_scores["scan"]
         selection_loss = scan_scores["log_loss"]
         improved = selection_loss < best_loss
@@ -139,30 +226,62 @@ def run(args):
         else:
             stale_epochs += 1
         history.append({
-            "epoch": epoch, "train_slice_loss": train_loss,
+            "epoch": epoch, "learning_rate": epoch_lr, "train_slice_loss": train_loss,
+            "train_slice_accuracy": online_metrics["accuracy"],
+            "train_slice_macro_f1": online_metrics["macro_f1"],
+            "train_slice_auroc": online_metrics["auroc"],
+            "train_metrics_scope": "online_training_mode_augmented_when_configured",
+            "train_seconds": train_seconds,
+            "early_stop_slice_loss": early_scores["slice"]["log_loss"],
+            "early_stop_slice_accuracy": early_scores["slice"]["accuracy"],
+            "early_stop_slice_macro_f1": early_scores["slice"]["macro_f1"],
+            "early_stop_slice_auroc": early_scores["slice"]["auroc"],
             "early_stop_scan_loss": selection_loss,
             "early_stop_scan_accuracy": scan_scores["accuracy"],
             "early_stop_scan_macro_f1": scan_scores["macro_f1"],
             "early_stop_scan_auroc": scan_scores["auroc"],
             "selected_checkpoint": improved, "epoch_seconds": time.perf_counter() - epoch_started,
         })
+        epoch_metrics.append({"epoch": epoch, "learning_rate": epoch_lr, "train_online_slice": online_metrics,
+                              "early_stop_slice": early_scores["slice"], "early_stop_scan": scan_scores})
+        write_json(output / "epoch_metrics.json", epoch_metrics)
         write_csv(output / "history.csv", history)
         print(f"Epoch {epoch:03d}: train_loss={train_loss:.4f}, "
               f"early_stop_scan_loss={selection_loss:.4f}, "
-              f"early_stop_scan_f1={scan_scores['macro_f1']:.4f}", flush=True)
+              f"early_stop_slice_accuracy={early_scores['slice']['accuracy']:.4f}, "
+              f"early_stop_slice_AUROC={early_scores['slice']['auroc']}", flush=True)
         if stale_epochs >= args.patience:
             print(f"Early stopping after {epoch} epochs; selected epoch {best_epoch}.", flush=True)
             break
 
+    # Release optimizer state before measuring inference memory; retain training peaks.
+    del optimizer
+    model.zero_grad(set_to_none=True)
     # Outer validation is constructed/scored only after the checkpoint is fixed.
+    # Exploratory inner-only runs never construct or score an outer-val loader.
     selected = torch.load(output / "best.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(selected["model_state"])
-    validation_loader = make_loader(data["val"], *loader_args, shuffle=False, device=device,
-                                    role="val")
+    evaluation_role = "early_stop" if inner_only else "val"
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+    validation_loader = early_loader if inner_only else make_loader(
+        data["val"], *loader_args, shuffle=False, device=device, role="val", preprocessing=preprocessing)
     scores, slices, scans = evaluate(model, validation_loader, device, expected_slices)
+    if device.type == "cuda":
+        evaluation_peak = max(evaluation_peak, cuda_peak_mib(device))
+    training_and_evaluation_seconds = time.perf_counter() - started
+    report, patients = prediction_report(slices, scans, bins, reject_threshold)
+    scores["patient"] = report["patient_metrics"]
+    inference_profile = profile_inference(
+        model, image_size, device, warmup=profile_warmup, repeats=profile_repeats,
+        enabled=not getattr(args, "skip_inference_profile", False),
+        on_cpu=getattr(args, "profile_on_cpu", False))
     sync_device(device)
     result = {
-        "status": "complete", "evaluation_role": "development_outer_validation",
+        "status": "complete", "metrics_format_version": 3,
+        "evaluation_role": "development_inner_early_stop" if inner_only else "development_outer_validation",
+        "evaluation_reuses_checkpoint_selection_patients": inner_only,
+        "coursework_report": report,
         "model_name": model_name,
         "augmentation": augmentation.name,
         "fold": args.fold, "best_epoch": best_epoch, "epochs_completed": len(history),
@@ -171,18 +290,35 @@ def run(args):
         "metrics": scores,
         "resources": {
             "trainable_parameters": count_parameters(model),
-            "training_and_evaluation_seconds": time.perf_counter() - started,
-            "peak_cuda_allocated_mib": torch.cuda.max_memory_allocated(device) / 2**20 if device.type == "cuda" else None,
+            "training_and_evaluation_seconds": training_and_evaluation_seconds,
+            "training_seconds": math.fsum(r["train_seconds"] for r in history),
+            "training_peak_cuda_allocated_mib": training_peak,
+            "evaluation_peak_cuda_allocated_mib": evaluation_peak,
+            "device": config["environment"]["device_name"],
+            "inference_profile": inference_profile,
+            "peak_cuda_allocated_mib": max(training_peak, evaluation_peak) if device.type == "cuda" else None,
             "timing_note": "Forward timing excludes data loading and transfer; mean per slice at configured batch size.",
+            "memory_note": "Training and early-stop peaks include optimizer state; separate inference profile follows its release.",
         },
     }
-    write_csv(output / "val_slice_predictions.csv", slices)
-    write_csv(output / "val_scan_predictions.csv", scans)
+    if preprocessing.name != "none":
+        if not inner_only:
+            preprocessing_audits["val"] = export_preprocessing_audit(output, validation_loader.dataset, "val")
+        result.update(preprocessing_config=preprocessing.to_dict(), preprocessing_crop_fit=crop_fit,
+                      preprocessing_audits=preprocessing_audits,
+                      preprocessing_preparation_seconds=config["preprocessing_preparation_seconds"])
+    prefix = "early_stop" if inner_only else "val"
+    write_csv(output / f"{prefix}_slice_predictions.csv", slices)
+    write_csv(output / f"{prefix}_scan_predictions.csv", scans)
+    result["failure_examples"] = export_evaluation_artifacts(
+        output, report, slices, patients, data[evaluation_role], args.data_root, image_size, prefix,
+        preprocessing=preprocessing, scan_parameters=validation_loader.dataset.scan_parameters)
     plot_history(output, history)
     # This marker is written last; partial/failed runs have no completed result.
     write_json(output / "metrics.json", result)
-    print(f"Outer validation: accuracy={scores['scan']['accuracy']:.4f}, "
-          f"macro_F1={scores['scan']['macro_f1']:.4f}, AUROC={scores['scan']['auroc']}", flush=True)
+    print(f"{result['evaluation_role']} (primary slice): accuracy={scores['slice']['accuracy']:.4f}, "
+          f"macro_F1={scores['slice']['macro_f1']:.4f}, AUROC={scores['slice']['auroc']}", flush=True)
+    print("Final-test target remains unassessed; these are development results.", flush=True)
     print(f"Completed. Results: {output / 'metrics.json'}", flush=True)
     return result
 
@@ -194,14 +330,34 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", choices=tuple(MODEL_CHOICES), default="small_cnn",
                         help="Fresh randomly initialized architecture (default: small_cnn).")
+    add_preprocessing_arguments(parser)
     parser.add_argument("--augmentation", choices=AUGMENTATION_NAMES, default="none",
-                        help="Training images only: none or light rotation/translation (default: none).")
+                        help="Training only: none, legacy light, isolated shifts/gamma, or integer_gamma.")
     parser.add_argument("--rotation-degrees", type=float, default=5.0,
                         help="Maximum absolute rotation for light augmentation, in degrees (default: 5).")
     parser.add_argument("--translation-fraction", type=float, default=0.03,
                         help="Maximum light translation as a fraction of each dimension (default: 0.03).")
+    parser.add_argument("--translation-pixels", type=int, default=4,
+                        help="Maximum absolute shift for pixel-shift profiles, integer 0-8 (default: 4).")
+    parser.add_argument("--sampling", choices=SAMPLING_NAMES, default="slice_uniform",
+                        help="Training only: original slice shuffle or class/patient-balanced draws.")
+    parser.add_argument("--lr-schedule", choices=("constant", "warmup_cosine"), default="constant")
+    parser.add_argument("--warmup-epochs", type=int, default=2)
+    parser.add_argument("--min-lr-ratio", type=float, default=0.01)
     parser.add_argument("--fold", type=int, default=1)
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=30,
+                        help="Experiment maximum, not a course-mandated epoch count (default: 30).")
+    parser.add_argument("--inner-only", action="store_true",
+                        help="Explore on early-stop patients only; do not score outer validation.")
+    parser.add_argument("--calibration-bins", type=int, default=15)
+    parser.add_argument("--reject-threshold", type=float, default=0.8,
+                        help="Fixed raw-confidence rejection rule; not a fitted or clinical threshold.")
+    parser.add_argument("--skip-inference-profile", action="store_true",
+                        help="Skip the separate resource benchmark; logs record it as unmeasured.")
+    parser.add_argument("--profile-on-cpu", action="store_true",
+                        help="Also benchmark CPU; by default the separate benchmark runs on CUDA only.")
+    parser.add_argument("--profile-warmup", type=int, default=10)
+    parser.add_argument("--profile-repeats", type=int, default=100)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=32)

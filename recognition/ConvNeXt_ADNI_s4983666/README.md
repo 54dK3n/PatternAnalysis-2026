@@ -8,16 +8,18 @@ This project lives at `recognition/ConvNeXt_ADNI_s4983666/` in the course fork, 
 
 ## Repository layout
 
-The root contains only the three executable Python entry points and essential repository metadata (`README.md` and `.gitignore`). Implementations, dependencies, documentation, and tests have separate directories:
+The root contains executable entry points, coursework-facing model/dataset interfaces and essential repository metadata (`README.md` and `.gitignore`). Implementations, dependencies, documentation, and tests have separate directories:
 
 ```text
 ConvNeXt_ADNI_s4983666/
+├── modules.py               # PyTorch model interface backed by models/
+├── dataset.py               # Coursework compatibility facade
 ├── train.py                 # Training CLI entry
 ├── predict.py               # Checkpoint prediction CLI entry
 ├── adni_splits.py           # Audit/prepare/verify CLI entry
 ├── models/
 │   ├── cnn.py               # Original small CNN
-│   ├── convnext.py          # Complete grayscale ConvNeXt-Tiny
+│   ├── convnext.py          # Grayscale ConvNeXt-Tiny and separate Lite preset
 │   └── registry.py          # CLI aliases and versioned checkpoint architectures
 ├── dataset/
 │   ├── splits.py            # Source audit and patient-level split implementation
@@ -42,7 +44,7 @@ ConvNeXt_ADNI_s4983666/
 └── outputs/                 # Ignored local data/manifests/experiment artifacts
 ```
 
-Each Python package also has an `__init__.py`. The former root implementation files `modules.py`, `dataset.py`, `metrics.py`, and `training_utils.py` have been replaced by these packages. Existing shell commands using the three entry scripts still work. Python callers should import implementations from their new packages, such as `models.create_model` and `dataset.manifests.load_fold`.
+Each Python package also has an `__init__.py`. Component implementations remain in these packages; `modules.py` and `dataset.py` now expose coursework-facing interfaces without copying implementations. Normal `dataset` imports resolve the package, which exposes its loader interface lazily so source audits do not require PyTorch. Existing shell commands using the three entry scripts still work. Python callers should import implementations from their new packages, such as `models.create_model` and `dataset.manifests.load_fold`.
 
 The existing split and verification algorithms are unchanged, so frozen manifests remain usable. The target's M0 source audit is retained in the same package. Both models preserve their parameter names and computation. Version 1 CNN/ConvNeXt checkpoints remain supported; new version 2 checkpoints also record the complete training-augmentation configuration. Prediction always uses fixed validation processing.
 
@@ -186,7 +188,7 @@ Training uses AdamW with learning rate 0.001, weight decay 0.0001, and binary cr
 
 For each scan, average its 20 slice-level AD probabilities and classify it as AD when the mean is at least 0.5. This aggregation and threshold are fixed before evaluation. These are uncalibrated scores; they should not be interpreted as clinical confidence estimates. Longitudinal scans retain their own diagnoses.
 
-After each epoch, evaluate only the early-stopping patients. Save every strict minimum of their **scan-level log loss**. Stop after 5 epochs without an improvement greater than 0.0001 relative to the last patience-reset value, up to 30 epochs by default. Reload the selected checkpoint and evaluate the complete outer-validation set once. Report scan-level accuracy, balanced accuracy, per-class precision/recall/F1, macro F1, AUROC, log loss, and a confusion matrix. Slice-level results are supplemental; they are not independent-patient results.
+After each epoch, evaluate only the early-stopping patients. Save every strict minimum of their **scan-level log loss**. Stop after 5 epochs without an improvement greater than 0.0001 relative to the last patience-reset value, up to 30 epochs by default (an experiment choice, not a coursework requirement). Reload the selected checkpoint and evaluate the complete outer-validation set once. Report scan-level accuracy, balanced accuracy, per-class precision/recall/F1, macro F1, AUROC, log loss, and a confusion matrix. Historical tables above use scan-level results. New logs mark slice-level evaluation as primary for this 2D task following staff clarification, and retain scan/patient summaries as secondary. Slice-level examples are not independent patients.
 
 ## Select a model and training augmentation
 
@@ -196,6 +198,8 @@ Run `python3 train.py --help` to see all options. Model selection and augmentati
 |---|---|
 | `--model cnn` or `--model small_cnn` | Original small CNN; default is `small_cnn` |
 | `--model convnext` or `--model convnext_tiny` | Complete ConvNeXt-Tiny |
+| `--model convnext_lite` | Separate smaller scratch ConvNeXt; no real ADNI performance claim yet |
+| `--inner-only` | Exploratory early-stop evaluation; never score outer validation |
 | `--augmentation none` | Original deterministic images; default |
 | `--augmentation light` | Random rotation and translation on training slices only |
 | `--rotation-degrees 5` | Maximum absolute angle for the light profile; accepted range 0–15 degrees |
@@ -303,6 +307,39 @@ python3 predict.py \
 
 The checkpoint determines its fold and preprocessing. A different manifest fingerprint is rejected. This version of `predict.py` evaluates that fold's outer validation only; it has no final-test or calibration mode. Reproducing a prediction does not create a new independent experiment.
 
+## Inspect inputs and frozen features
+
+`diagnose.py` inspects an existing CNN or ConvNeXt checkpoint on training and
+inner early-stop patients. It exports training-only transform comparisons,
+per-stage activations, learned LayerScale/residual contributions, and integer
+shift sensitivity. Optional fixed-budget linear probes fit new diagnostic heads
+to frozen patient-mean embeddings; they do not update the backbone or select a
+checkpoint using outer validation. Use a new output outside the original run.
+
+```bash
+python3 diagnose.py \
+  --checkpoint "$HOME/comp3710/runs/convnext_aug_fold01/best.pt" \
+  --data-root /home/groups/comp3710/ADNI \
+  --splits-dir "$HOME/comp3710/adni_splits_v1" \
+  --output "$HOME/comp3710/diagnostics/convnext_aug_fold01_v1" \
+  --device cuda --batch-size 16 --workers 4 --probes
+```
+
+Run in the existing training environment on an allocated compute node. See
+[feature diagnostics](docs/FEATURE_DIAGNOSTICS.md) for matching all three runs,
+sampling limits, interpretation and evidence status. These outputs are diagnostic
+subsets, not new outer-validation or final-test scores.
+
+## Sampling boundary and probe controls
+
+`diagnose_followup.py` implements the first A/B/D extension: exact 1-8 pixel
+shifts with intermediate features, round-trip boundary-loss controls, and
+native-dimension versus training-only PCA probes on replay and expanded patient
+cohorts. It preserves the prior early-stop selection and original checkpoints.
+See [follow-up usage](docs/FEATURE_DIAGNOSTIC_FOLLOWUP.md) for the command,
+server transfer helpers, measured units and interpretation limits. These
+controls do not train a backbone or score outer/reserved partitions.
+
 ## Reproducibility and remaining safeguards
 
 - Freeze this split before model experiments; do not choose a split seed using model scores.
@@ -333,3 +370,33 @@ The package layout and training-only augmentation are covered by the additional 
 ## Artificial Intelligence Usage Disclosure
 
 OpenAI Codex assisted with the data-audit script, baseline CNN and ConvNeXt-Tiny implementations, training/inference code, package restructuring, training-only augmentation, metrics, synthetic tests, code comments, protocol documentation, result review and repository documentation updates. Validation includes source review, synthetic integrity tests, known metric examples, actual CPU training with checkpoint-reload comparisons, and independent review of uploaded baseline predictions and frozen manifests. The project owner executed the real-data audit and three five-fold CNN repetitions on the course server. This development note should be incorporated into the final course-required AI-use disclosure; it does not replace that disclosure.
+
+## Coursework-aligned metric logging
+
+Following the v2.1 task sheet and staff clarification checked on 3 October 2026, new runs log slice-primary classification, raw confidence/ECE/Brier, fixed-rule rejection and risk--coverage, patient aggregation when diagnoses are consistent, factual failure examples and separate resource profiles. Per-epoch metrics include training and early-stop accuracy/AUROC. Scratch initialization and frozen patient roles are retained; the smaller ConvNeXt is optional, and the 30-epoch default is an experiment maximum. Final calibration/refit/test evaluation remains future work. See [the logging protocol and pilot command](docs/COURSEWORK_LOGGING.md) for exact files, definitions, limitations and profiling settings.
+
+## Rangpur GPU pilot submission
+
+The current server checkout is `$HOME/comp3710/comp3710-adni`. Submit a new scratch-trained inner-only Lite pilot from the login node using `bash "$HOME/comp3710/comp3710-adni/slurm/submit_pilot.sh" convnext_lite`. Use `cnn` for a control with the new logging. See [source update, submission and output instructions](docs/SLURM_PILOTS.md) for the complete source bundle, paths, budget and environment overrides. These runs retain the frozen patient roles and do not score outer validation, calibration or final test.
+
+## Predeclared inner-only experiment suite
+
+Submit `bash slurm/submit_suite.sh` to run the 17 fixed CNN/Lite controls sequentially within one GPU allocation. The plan isolates learning rate, weight decay, batch size, optional warmup/cosine, class/patient sampling and geometric/intensity augmentation. Completed cases can be reused under the same plan/code after an interruption. All cases remain development-only. See [acceptance status, exact settings, budget, submission and resume](docs/EXPERIMENT_SUITE.md). No final accuracy or fitted calibration is claimed.
+
+### Prospective feature controls (v2)
+
+The separate `run_feature_experiments.py` runner implements the six-case
+[feature/selection investigation](docs/EXPERIMENT_PLAN_V2.md). It retains the
+legacy training defaults and frozen patient roles, and scores only train and
+inner early-stop patients. See [submission and artifacts](docs/FEATURE_SUITE_USAGE.md).
+No new real-data result is claimed until the GPU jobs complete.
+
+## Optional scan-consistent input standardization
+
+Use `--preprocessing scan_intensity_crop` with `train.py` for label-free per-scan
+foreground percentile mapping and native-pixel crop/black padding. Run
+`audit_preprocessing.py` first to inspect original/processed inner-development
+inputs and the training-fitted crop window. Prediction restores the checkpoint's
+exact transform; defaults and older checkpoints keep their original behavior.
+See [algorithm, QA commands, four controls, logging and limits](docs/INPUT_PREPROCESSING.md).
+No real-data accuracy gain or final-test performance has been established.

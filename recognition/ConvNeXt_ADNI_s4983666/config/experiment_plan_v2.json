@@ -1,0 +1,468 @@
+{
+  "version": 2,
+  "status": "implemented_opt_in_feature_suite",
+  "training_launched": false,
+  "scope": "development_inner_only",
+  "manifest_sha256": "d370391aacf381b9eabdff4b798f962b867fa5109f0b0d64f36ff0b8e663c206",
+  "scoring_roles": [
+    "train",
+    "early_stop"
+  ],
+  "protected_unscored_roles": [
+    "val",
+    "calibration",
+    "test"
+  ],
+  "source_evidence": {
+    "comparison": "https://drive.google.com/file/d/1UW6IokKO05DcVsOfFKu5GXIsS3PxgEii/view",
+    "review": "https://drive.google.com/file/d/1kkr5wEGYYCh_5atB_70XOYvN85hMpCyz/view"
+  },
+  "cohort": {
+    "train": {
+      "patients": 343,
+      "scans": 745,
+      "slices": 14900
+    },
+    "early_stop": {
+      "patients": 38,
+      "scans": 94,
+      "slices": 1880
+    }
+  },
+  "existing_diagnostics": [
+    {
+      "id": "D00",
+      "checkpoint_relative_to_suite": "E00_cnn_attempt_01/best.pt"
+    },
+    {
+      "id": "D01",
+      "checkpoint_relative_to_suite": "E01_lite_reference_attempt_01/best.pt"
+    },
+    {
+      "id": "D02",
+      "checkpoint_relative_to_suite": "E09_integer_shift_attempt_01/best.pt"
+    }
+  ],
+  "diagnostic_settings": {
+    "all_train_patients": true,
+    "all_early_stop_patients": true,
+    "all_scans": true,
+    "selection_seed": 3710,
+    "max_shift_pixels": 8,
+    "shift_directions": "axis_aligned_positive_and_negative",
+    "round_trips": true,
+    "forwards_per_slice": 65,
+    "conditional_patient_bootstrap_samples": 1000,
+    "linear_probe": {
+      "epochs": 200,
+      "lr": 0.01,
+      "weight_decay": 0.01,
+      "fitting_role": "train",
+      "unit": "patient_mean_embedding"
+    },
+    "exact_feature_alignment": "only_when_shift_divisible_by_actual_layer_stride"
+  },
+  "core_cases": [
+    {
+      "id": "R00",
+      "intervention": "reference",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 4,
+          "stride": 4,
+          "padding": 0
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "all_trainable_parameters",
+        "lr_schedule": "constant",
+        "max_drop_path": 0.1,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "patience": 30
+      }
+    },
+    {
+      "id": "R01",
+      "intervention": "lr_schedule",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 4,
+          "stride": 4,
+          "padding": 0
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "all_trainable_parameters",
+        "lr_schedule": "warmup_cosine",
+        "max_drop_path": 0.1,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "warmup_epochs": 2,
+        "min_lr_ratio": 0.01,
+        "patience": 30
+      }
+    },
+    {
+      "id": "R02",
+      "intervention": "stem",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_overlap_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 7,
+          "stride": 4,
+          "padding": 3
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "all_trainable_parameters",
+        "lr_schedule": "constant",
+        "max_drop_path": 0.1,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "patience": 30
+      }
+    },
+    {
+      "id": "R03",
+      "intervention": "stem",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_stride2_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 4,
+          "stride": 2,
+          "padding": 1
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "all_trainable_parameters",
+        "lr_schedule": "constant",
+        "max_drop_path": 0.1,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "patience": 30
+      }
+    },
+    {
+      "id": "R04",
+      "intervention": "weight_decay_policy",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 4,
+          "stride": 4,
+          "padding": 0
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "zero_for_1d_parameters",
+        "lr_schedule": "constant",
+        "max_drop_path": 0.1,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "patience": 30
+      }
+    },
+    {
+      "id": "R05",
+      "intervention": "max_drop_path",
+      "settings": {
+        "fold": 1,
+        "seed_base": 3710,
+        "epochs": 30,
+        "stopping": "fixed_budget",
+        "batch_size": 32,
+        "workers": 2,
+        "threads": 2,
+        "model_identity": "convnext_lite_nodrop_v1",
+        "image_size": [
+          240,
+          256
+        ],
+        "depths": [
+          2,
+          2,
+          6,
+          2
+        ],
+        "channels": [
+          48,
+          96,
+          192,
+          384
+        ],
+        "stem": {
+          "kernel": 4,
+          "stride": 4,
+          "padding": 0
+        },
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "weight_decay_policy": "all_trainable_parameters",
+        "lr_schedule": "constant",
+        "max_drop_path": 0.0,
+        "layer_scale_init": 1e-06,
+        "augmentation": "none",
+        "sampling": "slice_uniform",
+        "bce_pos_weight": 1.018970189701897,
+        "precision": "float32",
+        "label_smoothing": 0,
+        "initialization": "untrained_matched_random",
+        "normalization": "(grayscale_uint8 / 255 - 0.5) / 0.5",
+        "prediction_threshold": 0.5,
+        "checkpoint_primary": "minimum_early_stop_slice_log_loss",
+        "checkpoint_shadow": "minimum_early_stop_scan_log_loss",
+        "patience": 30
+      }
+    }
+  ],
+  "optimizer_steps_per_epoch": 466,
+  "optimizer_steps_per_full_trajectory": 13980,
+  "prospective_selection": {
+    "primary": "minimum_early_stop_slice_log_loss",
+    "shadow": "minimum_early_stop_scan_log_loss",
+    "tie": "earliest_epoch",
+    "early_stopping": false,
+    "independent_trajectories_for_two_rules": false
+  },
+  "milestone_epochs": [
+    1,
+    5,
+    10,
+    20,
+    30
+  ],
+  "gradient_summary": {
+    "epochs": [
+      1,
+      2,
+      5,
+      10,
+      20,
+      30
+    ],
+    "first_training_batches": 10
+  },
+  "initialization_control": {
+    "shared_matching_untrained_tensors": true,
+    "overlap_new_stem_rng": "independent_declared_generator",
+    "training_order_hashes": true,
+    "preserve_rng_around_diagnostics": true,
+    "reset_training_rng_after_model_construction": true
+  },
+  "paired_repeats": {
+    "max_nonreference_candidates": 1,
+    "additional_seed_bases": [
+      4710,
+      5710
+    ],
+    "actual_additional_seeds": [
+      4711,
+      5711
+    ],
+    "repeat_reference": true,
+    "max_total_training_trajectories": 10,
+    "eligibility": {
+      "min_accuracy_gain": 0.02,
+      "min_auroc_gain": 0,
+      "max_ad_recall_drop": 0.02
+    },
+    "ranking": [
+      "slice_accuracy_desc",
+      "slice_auroc_desc",
+      "training_peak_memory_asc",
+      "case_id_asc"
+    ],
+    "no_eligible_action": "stop_and_review_diagnostics",
+    "not_a_significance_test": true
+  },
+  "resources": {
+    "gpus": 1,
+    "cpus": 4,
+    "proposed_request_hours": 6,
+    "queue_duration_limit_verified": true,
+    "serial_processes": true,
+    "new_architecture_smoke_epochs": 1,
+    "do_not_silently_change_batch_size": true,
+    "verified_qos_max_wall_hours": 12,
+    "verified_partition": "comp3710",
+    "verified_qos": "comp3710"
+  },
+  "artifacts_policy": {
+    "experiment_results": "Google Drive after verification; no retained local log copies",
+    "checkpoints": "Rangpur",
+    "source_specifications": "repository docs/config",
+    "clinical_interpretation": "Ken"
+  },
+  "implemented_controls": [
+    "fixed_budget_paired_checkpoint_outputs",
+    "new_versioned_stems_and_strides",
+    "optimizer_parameter_groups",
+    "configurable_drop_path",
+    "matched_random_init_and_rng_safe_diagnostics",
+    "milestone_states_and_gradient_logs",
+    "six_case_runner_and_prospective_repeat_gate"
+  ]
+}
