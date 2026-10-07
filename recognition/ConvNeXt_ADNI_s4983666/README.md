@@ -6,6 +6,37 @@ The implementation audits the course JPEG dataset, creates five-fold cross-valid
 
 This project lives at `recognition/ConvNeXt_ADNI_s4983666/` in the course fork, [54dK3n/PatternAnalysis-2026](https://github.com/54dK3n/PatternAnalysis-2026), on `topic-recognition`. Its package layout and current implementation were migrated from the standalone development project, [54dK3n/comp3710-adni](https://github.com/54dK3n/comp3710-adni). Final coursework submission still requires the course pull request and accompanying report; this migration does not claim completion of the remaining report or evaluation requirements.
 
+## Submission status
+
+This checkout contains runnable development code, not a completed final submission.
+See the [submission review](docs/SUBMISSION_STATUS.md) for verified checks and
+remaining acceptance work. Final-test accuracy remains `TODO(result)`.
+
+## How it works
+
+A frozen patient manifest assigns each image to a development training,
+early-stop or outer-validation role. The dataset applies the declared deterministic
+input processing and training-only augmentation. A scratch CNN or ConvNeXt outputs
+raw logits; the configured BCE or CE objective updates weights on training slices.
+The minimum early-stop scan log loss selects the checkpoint. Evaluation reports
+slice, scan and patient metrics separately, along with confidence and resources.
+Calibration and final-test scoring are not implemented by this development runner.
+
+```mermaid
+flowchart LR
+    A[Frozen patient manifests] --> B[Training slices and declared transforms]
+    B --> C[Scratch CNN or ConvNeXt]
+    C --> D[BCE or CE optimization]
+    E[Early-stop patients] --> F[Select checkpoint by scan log loss]
+    D --> F
+    F --> G[Development metrics and figures]
+```
+
+## Feasibility Review
+
+`TODO(owner)`: Ken's original feasibility review and required project rationale.
+Implementation notes and experiment plans do not replace the author-written review.
+
 ## Repository layout
 
 The root contains executable entry points, coursework-facing model/dataset interfaces and essential repository metadata (`README.md` and `.gitignore`). Implementations, dependencies, documentation, and tests have separate directories:
@@ -38,7 +69,9 @@ ConvNeXt_ADNI_s4983666/
 │   └── artifacts.py         # Fingerprints, CSV/JSON, protected outputs, and plots
 ├── config/
 │   ├── requirements.txt
-│   └── requirements-train.txt
+│   ├── requirements-train.txt
+│   └── recipe_*.json         # Fixed GPU smoke, comparison and follow-up plans
+├── slurm/                   # GPU launchers, serial suites and aggregate archiver
 ├── docs/                    # Data protocol, smoke records, and local references
 ├── tests/                   # Synthetic unit, integration, and CLI tests
 └── outputs/                 # Ignored local data/manifests/experiment artifacts
@@ -46,7 +79,7 @@ ConvNeXt_ADNI_s4983666/
 
 Each Python package also has an `__init__.py`. Component implementations remain in these packages; `modules.py` and `dataset.py` now expose coursework-facing interfaces without copying implementations. Normal `dataset` imports resolve the package, which exposes its loader interface lazily so source audits do not require PyTorch. Existing shell commands using the three entry scripts still work. Python callers should import implementations from their new packages, such as `models.create_model` and `dataset.manifests.load_fold`.
 
-The existing split and verification algorithms are unchanged, so frozen manifests remain usable. The target's M0 source audit is retained in the same package. Both models preserve their parameter names and computation. Version 1 CNN/ConvNeXt checkpoints remain supported; new version 2 checkpoints also record the complete training-augmentation configuration. Prediction always uses fixed validation processing.
+The existing split and verification algorithms are unchanged, so frozen manifests remain usable. The target's M0 source audit is retained in the same package. Both models preserve their parameter names and computation. Checkpoint formats 1 through 4 remain supported by `predict.py`: format 2 records augmentation, format 3 adds scan preprocessing, and format 4 binds optional input/head/precision/aggregation controls. Older diagnostic tools support only their documented historical formats. Prediction applies the saved deterministic evaluation processing.
 
 ## Setup
 
@@ -72,7 +105,7 @@ The completed server baseline used Python 3.11.15, PyTorch 2.13.0, Pillow 12.3.0
 
 ## Local workspace files
 
-Local experiment outputs, datasets, model weights, the coursework PDF and `.venv/` remain outside version control. Outputs include private split manifests, prediction records, checkpoints and local review reports; keep them outside all public commits. Historical paths inside experiment configurations remain unchanged because they record where those experiments actually ran. Create a new virtual environment on each machine and install its dependencies locally.
+Local experiment outputs, datasets, model weights, the coursework PDF and `.venv/` remain outside version control. Real experiment logs, predictions, checkpoints and review artifacts remain on Rangpur and private Drive. Local experiment downloads are temporary and removed after verified archiving; keep all patient-level artifacts outside public commits. Historical paths inside experiment configurations remain unchanged because they record where those experiments actually ran. Create a new virtual environment on each machine and install its dependencies locally.
 
 The dataset must be obtained separately through the course's authorised access. Expected layout:
 
@@ -119,12 +152,11 @@ their original folders, while the manifest rows determine their experimental
 roles. JPEG filenames encode scan and slice IDs; patient IDs come from the
 matching metadata filename.
 
-This migration transfers the existing CNN, ConvNeXt-Tiny, optional training
-augmentation, prediction, documentation, and tests into the package layout.
-It preserves the target's local outputs and environment. It does not perform
-new ADNI training or final-test evaluation, or implement the remaining model,
-calibration, report, or Slurm milestones. Historical experiment records retain
-the paths where those experiments actually ran.
+The package migration preserved historical model/checkpoint meanings and frozen
+patient assignments. Later development added Lite, training controls, metric
+logging and Slurm launchers. Real GPU runs and archived runtime checks now exist;
+final refit/calibration/test support and final report acceptance remain unfinished.
+Historical configurations retain the paths where those experiments actually ran.
 
 ## Prepare and verify the split
 
@@ -161,7 +193,7 @@ The project owner ran both commands and supplied their output. The reported veri
 
 The original folders shared 216 patients. The new manifests passed patient, scan, path, exact-file, and exact-decoded-pixel separation checks at the required boundaries. Source data matched the recorded manifests, and each development sample appeared in exactly one outer validation fold.
 
-The complete server-generated manifests were subsequently copied into the ignored local `outputs/adni_splits_v1/` folder. Their checksums, frozen assignments, recorded identity/hash boundaries and correspondence with the five baseline runs were checked locally. This is not a local rerun against the original MRI pixels or metadata; those source files remain on the server. Local execution tests use synthetic data. The real images, metadata, generated patient manifests, and model weights are excluded from version control.
+The complete server-generated manifests were previously inspected from an ignored local copy. Their checksums, frozen assignments, recorded identity/hash boundaries and correspondence with the five baseline runs were checked locally. Frozen manifests remain available on Rangpur; a fresh clone does not include them. This is not a local rerun against the original MRI pixels or metadata; those source files remain on the server. Local execution tests use synthetic data. The real images, metadata, generated patient manifests, and model weights are excluded from version control.
 
 ## Initial five-fold baseline results
 
@@ -188,7 +220,7 @@ Training uses AdamW with learning rate 0.001, weight decay 0.0001, and binary cr
 
 For each scan, average its 20 slice-level AD probabilities and classify it as AD when the mean is at least 0.5. This aggregation and threshold are fixed before evaluation. These are uncalibrated scores; they should not be interpreted as clinical confidence estimates. Longitudinal scans retain their own diagnoses.
 
-After each epoch, evaluate only the early-stopping patients. Save every strict minimum of their **scan-level log loss**. Stop after 5 epochs without an improvement greater than 0.0001 relative to the last patience-reset value, up to 30 epochs by default (an experiment choice, not a coursework requirement). Reload the selected checkpoint and evaluate the complete outer-validation set once. Report scan-level accuracy, balanced accuracy, per-class precision/recall/F1, macro F1, AUROC, log loss, and a confusion matrix. Historical tables above use scan-level results. New logs mark slice-level evaluation as primary for this 2D task following staff clarification, and retain scan/patient summaries as secondary. Slice-level examples are not independent patients.
+After each epoch, evaluate only the early-stopping patients. Save every strict minimum of their **scan-level log loss**. The historical baseline used patience 5 with a 30-epoch cap. The current CLI defaults patience to the requested epoch cap, so declare `--patience 5` to reproduce historical stopping or `--patience 30 --epochs 30` for a full budget. Patience uses an improvement greater than 0.0001; every strict loss minimum is still saved. Epoch budgets are experiment choices, not coursework requirements. Reload the selected checkpoint and evaluate the complete outer-validation set once. Report scan-level accuracy, balanced accuracy, per-class precision/recall/F1, macro F1, AUROC, log loss, and a confusion matrix. Historical tables above use scan-level results. New logs mark slice-level evaluation as primary for this 2D task following staff clarification, and retain scan/patient summaries as secondary. Slice-level examples are not independent patients.
 
 ## Select a model and training augmentation
 
@@ -198,7 +230,7 @@ Run `python3 train.py --help` to see all options. Model selection and augmentati
 |---|---|
 | `--model cnn` or `--model small_cnn` | Original small CNN; default is `small_cnn` |
 | `--model convnext` or `--model convnext_tiny` | Complete ConvNeXt-Tiny |
-| `--model convnext_lite` | Separate smaller scratch ConvNeXt; no real ADNI performance claim yet |
+| `--model convnext_lite` | Separate smaller scratch ConvNeXt; real inner-development runs exist, final-test performance remains unassessed |
 | `--inner-only` | Exploratory early-stop evaluation; never score outer validation |
 | `--augmentation none` | Original deterministic images; default |
 | `--augmentation light` | Random rotation and translation on training slices only |
@@ -252,7 +284,7 @@ Reload a ConvNeXt checkpoint with the same prediction command used for the CNN, 
 
 The first unaugmented real-data ConvNeXt run (fold 1, seed base 3710) selected epoch 4 and stopped after epoch 9. Its scan accuracy was 66.82%, macro F1 0.6627, and AUROC 0.7429 on the same frozen fold where the initial CNN achieved 83.41%, 0.8339, and 0.9136. Training loss fell from 0.683 to 0.031 while early-stop scan loss had its minimum of 0.718 at epoch 4. These trends motivate testing augmentation; the losses use different evaluation units and cannot be directly subtracted. This single fold does not establish an overall architecture ranking.
 
-The [ConvNeXt experiment plan](docs/CONVNEXT_EXPERIMENT_PLAN.md) explains the implemented architecture, the subsequently reported augmented fold-1 result, supported observations versus untested explanations, and proposed controlled comparisons. Proposed model variants and tuning features in that plan are not yet implemented.
+The [ConvNeXt experiment plan](docs/CONVNEXT_EXPERIMENT_PLAN.md) explains the implemented architecture, the subsequently reported augmented fold-1 result, supported observations versus untested explanations, and proposed controlled comparisons. Later overlapping/stride-2/no-DropPath controls are documented in the [feature suite](docs/FEATURE_SUITE_USAGE.md); attention/RoPE proposals remain unimplemented.
 
 ## Run the first fold
 
@@ -290,7 +322,7 @@ The full source and manifest audit runs automatically before every training or p
 | `val_scan_predictions.csv` | One aggregated prediction per outer-validation scan |
 | `metrics.json` | Completed-run marker, held-out metrics, selected epoch, and resource measurements |
 
-Training loss is class-weighted at slice level; early-stop loss is unweighted at scan level, so the two curves use different objectives. Resource output includes parameter count, total training/evaluation time, and peak allocated CUDA memory when available. Forward timing excludes loading and transfer; milliseconds per slice describe the configured batch size, not single-request latency. CPU runs report CUDA memory as `null`. Patient-clustered confidence intervals and automatic five-fold summary generation are not yet implemented.
+Training loss is class-weighted at slice level; early-stop loss is unweighted at scan level, so the two curves use different objectives. Resource output includes parameter count, total training/evaluation time, and peak allocated CUDA memory when available. Forward timing excludes loading and transfer; milliseconds per slice describe the configured batch size, not single-request latency. CPU runs report CUDA memory as `null`. Selected historical reviews include conditional patient-cluster bootstrap summaries, but these do not correct adaptive selection. A final matched five-fold comparison summary remains unfinished.
 
 All run artifacts stay outside Git. Incomplete runs have no final `metrics.json`; inspect the error and use a new output directory when retrying.
 
@@ -367,7 +399,21 @@ The [ConvNeXt smoke-test record](docs/CONVNEXT_SMOKE_TEST.md) documents the 57 p
 
 The package layout and training-only augmentation are covered by the additional [refactor smoke-test record](docs/REFACTOR_SMOKE_TEST.md).
 
+## Failure case autopsy
+
+`TODO(owner)`: Ken must select and clinically interpret the required failure examples.
+The code exports factual examples; MRI grids and patient identifiers remain private.
+
+## Recommendation to project manager
+
+`TODO(owner)`: Ken must write the recommendation using validated performance,
+confidence, rejection, resource measurements and documented limitations.
+
 ## Artificial Intelligence Usage Disclosure
+
+`TODO(owner)`: Complete and approve the final course-required disclosure. The
+development note below and ignored AI usage log are supporting material.
+
 
 OpenAI Codex assisted with the data-audit script, baseline CNN and ConvNeXt-Tiny implementations, training/inference code, package restructuring, training-only augmentation, metrics, synthetic tests, code comments, protocol documentation, result review and repository documentation updates. Validation includes source review, synthetic integrity tests, known metric examples, actual CPU training with checkpoint-reload comparisons, and independent review of uploaded baseline predictions and frozen manifests. The project owner executed the real-data audit and three five-fold CNN repetitions on the course server. This development note should be incorporated into the final course-required AI-use disclosure; it does not replace that disclosure.
 
@@ -389,7 +435,8 @@ The separate `run_feature_experiments.py` runner implements the six-case
 [feature/selection investigation](docs/EXPERIMENT_PLAN_V2.md). It retains the
 legacy training defaults and frozen patient roles, and scores only train and
 inner early-stop patients. See [submission and artifacts](docs/FEATURE_SUITE_USAGE.md).
-No new real-data result is claimed until the GPU jobs complete.
+Historical feature runs and their report recovery are recorded in private archives.
+This runner's existence does not establish independent final-test performance.
 
 ## Optional scan-consistent input standardization
 
@@ -400,3 +447,50 @@ inputs and the training-fitted crop window. Prediction restores the checkpoint's
 exact transform; defaults and older checkpoints keep their original behavior.
 See [algorithm, QA commands, four controls, logging and limits](docs/INPUT_PREPROCESSING.md).
 No real-data accuracy gain or final-test performance has been established.
+
+## Selectable training recipes
+
+[Training recipes and independent controls](docs/TRAINING_RECIPES.md) expose
+`--recipe`, `--input-channels`, `--loss`, `--precision`, `--patient-aggregation`
+and `--drop-path` alongside existing preprocessing/optimizer options. Explicit
+flags override recipe defaults. `peer_tiny` is a documented approximation of a
+peer configuration; frozen patient roles and scratch initialization are retained.
+Preview the resolved commands with `--dry-run` before submission. Three real GPU
+train/replay checks passed and were privately archived; they establish runtime
+compatibility, not target accuracy. The fixed [comparison workflow](docs/RECIPE_GPU_EXPERIMENTS.md)
+and [eight follow-up contrasts](docs/RECIPE_FOLLOWUP_EXPERIMENTS.md) use the same
+patient roles. Their inner selection-cohort scores are not final-test evidence.
+
+
+## Results and figures
+
+The historical baseline table above reports development outer-validation scan
+metrics. Current recipe experiments report slice-primary inner selection-cohort
+metrics, so the tables cannot be compared as the same evaluation. Final matched
+CNN/ConvNeXt comparison, final-test slice accuracy, ROC/confusion figures and
+required report figures remain `TODO(result)`. Aggregate real logs and non-MRI
+figures are archived privately; patient-level files are not included in Git.
+
+## Resource profiling
+
+The code records actual parameter count, epoch timing, training/evaluation CUDA
+allocation and synchronized forward latency at batches 1 and 64 (10 warmups,
+100 timed forwards). Completed GPU smoke profiles exist in the private archive.
+`TODO(result)`: Include the selected final models' comparable measurements in the
+report, with GPU/software, input size, precision and timing scope.
+
+## Calibration and reject-option analysis
+
+The current logger exports raw-confidence ECE/reliability, confidence histograms
+and descriptive risk-coverage curves. Its default rejection confidence 0.8 is a
+predeclared rule, not a fitted operating point or proof of 0.80 accuracy.
+`TODO(result)`: Freeze the final model, fit/declare the calibration and decision
+protocol without final-test tuning, then report coverage, accepted accuracy,
+referrals and overall accuracy from the one-time final evaluation.
+
+## References
+
+- Liu et al., [A ConvNet for the 2020s](https://arxiv.org/abs/2201.03545).
+- [Authors' ConvNeXt implementation](https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py): architectural reference; local models use scratch weights.
+- [PyTorch reproducibility](https://docs.pytorch.org/docs/2.6/notes/randomness.html).
+- [Coursework logging protocol and checked staff clarifications](docs/COURSEWORK_LOGGING.md).
