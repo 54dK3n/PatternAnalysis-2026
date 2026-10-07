@@ -196,7 +196,7 @@ all four controls automatically. Its defaults extend the validated pilot:
 | Control | Default |
 |---|---|
 | Model / preprocessing | Scratch `convnext_lite` / `scan_intensity_crop` |
-| Epoch cap / patience / min delta | 30 / 5 / 0.0001 |
+| Epoch cap / patience / min delta | 30 / matches epoch cap / 0.0001 |
 | Optimizer / LR / weight decay | AdamW / 0.0001 / 0.05 |
 | Batch size / base seed | 32 / 3710 (effective fold-1 seed 3711) |
 | Schedule / augmentation / sampler | Constant / none / slice-uniform |
@@ -205,9 +205,13 @@ all four controls automatically. Its defaults extend the validated pilot:
 | Selection / evaluation | Minimum early-stop scan log loss / inner early-stop only |
 | Precision / loss | FP32 / training-class-weighted BCE, no label smoothing |
 
-Thirty is a proposed cap; patience can stop training earlier. An earlier best
-epoch is valid. For a fixed thirty-epoch comparison without patience stopping,
-set `--epochs 30 --patience 30` consistently in every branch. Existing training
+Thirty is a proposed budget, not a course requirement. When `--patience` is
+omitted, the launcher resolves it to `--epochs`, so normal training reaches the
+requested budget without a patience-based stop. An explicitly smaller patience
+re-enables early stopping. An earlier best epoch remains valid; model selection
+continues to save the minimum early-stop scan-loss checkpoint across the entire
+run. Thus the best checkpoint can still come from epoch 4 even after 30 epochs.
+Use the same epoch/patience policy in every comparison branch. Existing training
 semantics, models and checkpoint formats are unchanged; AMP/label smoothing are
 not added by this launcher. Outer validation, calibration and final-test scoring
 are not available in this launcher.
@@ -219,7 +223,7 @@ cd "$HOME/comp3710/comp3710-adni"
 bash slurm/submit_preprocessing_train.sh \
   --model convnext_lite --fold 1 \
   --preprocessing scan_intensity_crop --augmentation none \
-  --epochs 30 --patience 5 --batch-size 32 \
+  --epochs 30 --patience 30 --batch-size 32 \
   --lr 0.0001 --weight-decay 0.05 --lr-schedule constant \
   --seed 3710 --workers 2 --threads 2 --time-limit 02:00:00 \
   --dry-run
@@ -237,7 +241,8 @@ Examples that change one explicit control (preview before submitting):
 
 ```bash
 bash slurm/submit_preprocessing_train.sh --lr 0.0003 --dry-run
-bash slurm/submit_preprocessing_train.sh --epochs 30 --patience 30 --dry-run
+bash slurm/submit_preprocessing_train.sh --epochs 30 --dry-run
+bash slurm/submit_preprocessing_train.sh --epochs 30 --patience 10 --dry-run
 bash slurm/submit_preprocessing_train.sh --lr-schedule warmup_cosine --warmup-epochs 2 --dry-run
 for profile in none scan_intensity scan_crop scan_intensity_crop; do
   bash slurm/submit_preprocessing_train.sh --preprocessing "$profile" --dry-run
@@ -301,3 +306,22 @@ historical and scan-standardized checkpoint formats. The multi-epoch fixture
 forces early stopping after two epochs with first-epoch weights selected, checking
 the failure mode that the original one-epoch summary could not handle. This does
 not constitute a new real-data training result.
+
+### Meaning of the scan checkpoint selector
+
+A complete scan contains 20 slice AD probabilities in the real frozen manifests.
+Compute their arithmetic mean first; then compute binary log loss against that
+scan's AD/NC label. The selector averages these losses equally over early-stop
+scans. A patient can contribute multiple separately labelled scans, so this is
+not patient-level loss and not an average of slice losses. Training still
+optimizes class-weighted slice BCE; this scan loss is used only for checkpoint
+selection and optional early stopping. Log loss measures probability quality and
+penalizes confident mistakes; accuracy measures decisions at threshold 0.5.
+A slightly higher slice accuracy therefore need not imply a smaller scan loss.
+
+The fixed-budget launcher continues to record every epoch's losses, accuracy and
+AUROC. It does not stop just because the early-stop loss temporarily worsens,
+but it also does not replace the best checkpoint with the last weights unless
+the last epoch has a smaller scan loss. Use history.csv/epoch_metrics.json to
+review later training; no improvement is guaranteed by a longer budget. Existing
+completed runs remain immutable; changing the budget starts a fresh model/run.

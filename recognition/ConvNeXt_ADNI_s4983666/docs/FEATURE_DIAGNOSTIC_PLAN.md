@@ -8,7 +8,7 @@ The three existing fold 1 checkpoints were inspected on the same 64 training pat
 
 Four-direction mean slice decision changes after exact two-pixel shifts were 4.96% for SmallCNN, 21.78% for ConvNeXt without augmentation and 9.85% for ConvNeXt with light augmentation. Corresponding mean absolute probability changes were 0.03518, 0.19442 and 0.07000. Actual ConvNeXt residual contributions were nonzero. The same 12 training-image transform samples across the three audits showed no detected foreground clipping or unexpected resizing. These observations do not identify a responsible layer, establish that interpolation is harmless across the dataset or prove preservation of classification-relevant information.
 
-Source evidence: [raw diagnostic outputs](../outputs/server_imports/features_20261001_131402/diagnostics_20261001_130255/), [verified analysis](../outputs/review/feature_diagnosis_20261001/summary.json) and [independent verification](../outputs/review/feature_diagnosis_20261001/verification.json). These ignored local artifacts are not intended for Git submission.
+Source evidence was reviewed from the historical ignored paths `outputs/server_imports/features_20261001_131402/diagnostics_20261001_130255/`, `outputs/review/feature_diagnosis_20261001/summary.json` and `outputs/review/feature_diagnosis_20261001/verification.json`. Real diagnostic artifacts are retained on Rangpur and in private Drive archives. These private paths are provenance references, not files shipped in a fresh Git clone.
 
 ## Shared protocol
 

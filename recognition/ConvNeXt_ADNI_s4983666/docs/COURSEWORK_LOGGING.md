@@ -10,8 +10,8 @@ No fixed 15- or 30-epoch requirement was found for this project.
 
 `--model convnext_lite` constructs the separate `convnext_lite_v1` architecture:
 depths `(2, 2, 6, 2)` and channels `(48, 96, 192, 384)`. It inherits the local
-ConvNeXt block, stem, downsampling and head. A real fold-1 inner pilot is recorded in private local outputs; its development
-results do not establish final-test performance. Existing `cnn`, `small_cnn`, `convnext` and `convnext_tiny` aliases
+ConvNeXt block, stem, downsampling and head. Real fold-1 inner pilots are recorded on Rangpur and in private Drive archives;
+their development results do not establish final-test performance. Existing `cnn`, `small_cnn`, `convnext` and `convnext_tiny` aliases
 retain their original architecture, initialization, names and state-dict shapes.
 
 The original default of 30 epochs and scan-log-loss checkpoint selection remains
@@ -30,13 +30,15 @@ Source integrity verification still checks all original sources.
 
 ## Required metric records
 
-New result records use `metrics_format_version: 3`. Checkpoint format remains 2;
-formats 1 and 2 remain readable. Old experiment artifacts are never rewritten.
+New result records use `metrics_format_version: 3`. Historical checkpoints use
+formats 1/2; scan preprocessing uses 3, and optional execution controls use 4.
+`predict.py` reads all four. Old artifacts are never rewritten. See
+[selectable recipes](TRAINING_RECIPES.md) for controls and compatibility.
 
 | File | Contents |
 |---|---|
 | `config.json` | Model/version, random initialization, actual epoch cap, early-stopping rule, frozen-manifest digest, transformation, seed, device and package versions, confidence rule and profiling settings |
-| `history.csv` | Weighted train BCE, online train accuracy/F1/AUROC, early-stop slice and scan metrics, elapsed epoch/training times, selected checkpoint flag |
+| `history.csv` | Configured train objective loss, online train accuracy/F1/AUROC, early-stop slice and scan metrics, elapsed epoch/training times, selected checkpoint flag |
 | `epoch_metrics.json` | Full per-epoch train-online and early-stop metrics, including per-class precision/recall/F1 and confusion matrices |
 | `metrics.json` | Selected-checkpoint classification, raw confidence/rejection, patient aggregation status, resource measurements and failure-example count |
 | `val_*_predictions.csv` | Auditable outer-validation slice/scan/patient probabilities; `early_stop_*` instead in inner-only mode |
@@ -47,8 +49,10 @@ formats 1 and 2 remain readable. Old experiment artifacts are never rewritten.
 Accuracy, per-class precision/recall, macro-F1, AUROC, balanced accuracy, log loss
 and confusion matrices are written under `metrics.slice` and `metrics.scan`.
 Staff recommend slice-primary evaluation for our 2D task. Patient separation
-remains mandatory regardless of evaluation unit. `metrics.patient` averages all
-slices of each patient only if each patient has a consistent diagnosis. If any
+remains mandatory regardless of evaluation unit. By default, `metrics.patient`
+averages all slice probabilities of each patient; the optional `mean_logit`
+control averages raw AD margins before sigmoid instead. Both require each
+patient to have a consistent diagnosis. If any
 longitudinal patient has mixed diagnoses, patient metrics are `null` and the
 reason is logged, rather than silently assigning a diagnosis or dropping cases.
 
