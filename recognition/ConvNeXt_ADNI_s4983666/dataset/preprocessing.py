@@ -122,9 +122,9 @@ def preprocessing_from_args(args: argparse.Namespace) -> PreprocessingConfig:
 def checkpoint_preprocessing(config: dict[str, Any]) -> PreprocessingConfig:
     """Decode historical formats or require the new checkpoint's exact pipeline."""
     version = config["checkpoint_format_version"]
-    if type(version) is not int or version not in (1, 2, 3):
+    if type(version) is not int or version not in (1, 2, 3, 4):
         raise ValueError("Unsupported checkpoint format.")
-    if version in (1, 2):
+    if version in (1, 2) or (version == 4 and config.get("preprocessing_config") is None):
         if config["normalization"] != LEGACY_NORMALIZATION or "preprocessing_config" in config:
             raise ValueError("Unsupported historical checkpoint preprocessing.")
         return PreprocessingConfig()

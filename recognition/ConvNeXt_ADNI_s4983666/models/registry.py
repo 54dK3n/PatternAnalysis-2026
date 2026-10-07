@@ -1,5 +1,7 @@
 """Resolve CLI model aliases and construct fresh versioned architectures."""
 
+from torch import nn
+
 from .cnn import SmallCNN
 from .convnext import (ConvNeXtLite, ConvNeXtTiny, ConvNeXtLiteOverlap,
                        ConvNeXtLiteStride2, ConvNeXtLiteNoDrop)
@@ -25,19 +27,22 @@ def model_minimum_size(name):
     raise ValueError(f"Unsupported model name: {name}")
 
 
-def create_model(name):
+def create_model(name: str, *, input_channels: int = 1, output_classes: int = 1,
+                 drop_path: float | None = None) -> nn.Module:
     """Construct a fresh model; training folds must never reuse another fold's weights."""
     if name == "small_cnn_v1":
-        return SmallCNN()
+        if drop_path is not None:
+            raise ValueError("DropPath applies to ConvNeXt only.")
+        return SmallCNN(input_channels, output_classes)
     if name == "convnext_tiny_v1":
-        return ConvNeXtTiny()
+        return ConvNeXtTiny(input_channels, output_classes, drop_path)
     if name == "convnext_lite_v1":
-        return ConvNeXtLite()
+        return ConvNeXtLite(input_channels, output_classes, drop_path)
     variants = {"convnext_lite_overlap_v1": ConvNeXtLiteOverlap,
                 "convnext_lite_stride2_v1": ConvNeXtLiteStride2,
                 "convnext_lite_nodrop_v1": ConvNeXtLiteNoDrop}
     if name in variants:
-        return variants[name]()
+        return variants[name](input_channels, output_classes, drop_path)
     raise ValueError(f"Unsupported model name: {name}")
 
 

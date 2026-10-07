@@ -15,6 +15,10 @@ import time
 
 import torch
 from torch import nn
+from typing import Any
+from utils.training_controls import (ExecutionControls, RecipeParser, add_execution_arguments,
+    controls_from_args, attach_controls, validate_device, model_input, autocast_context,
+    ad_logits, make_criterion, model_controls)
 
 from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
 from dataset.preprocessing import (SCAN_NORMALIZATION, add_preprocessing_arguments,
@@ -33,7 +37,8 @@ from utils.artifacts import code_fingerprints, plot_history, validate_output, wr
 from utils.runtime import environment_info, seed_everything, select_device, sync_device
 
 
-def train_epoch(model, loader, optimizer, criterion, device, metrics_sink=None):
+def train_epoch(model: nn.Module, loader: Any, optimizer: torch.optim.Optimizer,
+                criterion: nn.Module, device: torch.device, metrics_sink: dict | None = None) -> float:
     """Update weights using only training slices and fail on non-finite loss."""
     model.train()
     total_loss, count = 0.0, 0
@@ -42,29 +47,42 @@ def train_epoch(model, loader, optimizer, criterion, device, metrics_sink=None):
         images = batch["image"].to(device, non_blocking=device.type == "cuda")
         labels = batch["label"].to(device, non_blocking=device.type == "cuda")
         optimizer.zero_grad(set_to_none=True)
-        logits = model(images)
-        loss = criterion(logits, labels)
+        with autocast_context(model, device):
+            logits = model(model_input(model, images))
+            targets = labels.long() if model_controls(model).output_classes == 2 else labels
+            loss = criterion(logits, targets)
         if not torch.isfinite(loss).item():
             raise ValueError("Training produced non-finite loss; no evaluation will be published.")
-        loss.backward()
-        optimizer.step()
+        scaler = getattr(model, '_grad_scaler', None)
+        if scaler is None:
+            loss.backward()
+            optimizer.step()
+        else:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         total_loss += loss.detach().item() * labels.numel()
         count += labels.numel()
         if metrics_sink is not None:
             observed_labels.extend(int(v) for v in labels.detach().cpu().tolist())
-            observed_probabilities.extend(torch.sigmoid(logits.detach()).cpu().tolist())
+            observed_probabilities.extend(torch.sigmoid(ad_logits(model, logits.detach())).cpu().tolist())
     if metrics_sink is not None:
         metrics_sink.update(binary_metrics(observed_labels, observed_probabilities))
     return total_loss / count
 
 
-def run(args):
+def run(args: argparse.Namespace) -> dict[str, Any]:
     """Keep checkpoint selection and outer-fold evaluation in separate phases."""
     # Preserve the original default for CLI users and existing Python callers.
     requested_model = getattr(args, "model", "small_cnn")
     if requested_model not in MODEL_CHOICES:
         raise ValueError(f"Unsupported model: {requested_model}")
     model_name = MODEL_CHOICES[requested_model]
+    controls = controls_from_args(args)
+    if model_name == 'small_cnn_v1' and controls.drop_path is not None:
+        raise ValueError('DropPath applies to ConvNeXt only.')
+    if args.patience is None:
+        args.patience = args.epochs
     minimum_size = model_minimum_size(model_name)
     augmentation = make_augmentation(
         getattr(args, "augmentation", "none"),
@@ -98,13 +116,14 @@ def run(args):
     min_lr_ratio = getattr(args, "min_lr_ratio", 0.01)
     learning_rate(1, args.epochs, args.lr, schedule_name, warmup_epochs, min_lr_ratio)
     preprocessing = preprocessing_from_args(args)
+    device = select_device(args.device)
+    validate_device(controls, device)
     output = validate_output(args.output, args.data_root, args.splits_dir)
     data = load_fold(args.data_root, args.splits_dir, args.fold)
     expected_slices = int(data["report"]["config"]["expected_slices"])
     seed = args.seed + args.fold
     seed_everything(seed)
     torch.set_num_threads(args.threads)
-    device = select_device(args.device)
     image_size = (args.image_height, args.image_width)
     preprocessing_started = time.perf_counter()
     train_scan_parameters = None
@@ -118,7 +137,11 @@ def run(args):
 
     preprocessing_seconds = time.perf_counter() - preprocessing_started
     # No resume option: every run/fold creates an independent model and optimizer.
-    model = create_model(model_name).to(device)
+    model = create_model(model_name, input_channels=controls.input_channels,
+                         output_classes=controls.output_classes, drop_path=controls.drop_path).to(device)
+    attach_controls(model, controls)
+    if controls.precision == 'amp_fp16':
+        model._grad_scaler = torch.amp.GradScaler('cuda')
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     class_counts = Counter(int(row["label"]) for row in data["train"])
     if class_counts[0] == 0 or class_counts[1] == 0:
@@ -126,7 +149,9 @@ def run(args):
     _, sampling_config = sampling_weights(data["train"], sampling_name)
     # Balancing both the sampler and the loss would apply the class correction twice.
     pos_weight = class_counts[0] / class_counts[1] if sampling_name == "slice_uniform" else 1.0
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
+    if controls.loss not in ('weighted_bce', 'weighted_cross_entropy'):
+        pos_weight = 1.0
+    criterion = make_criterion(controls, pos_weight, device)
     loaders_started = time.perf_counter()
     loader_args = (args.data_root, image_size, args.batch_size, args.workers, seed)
     train_loader = make_loader(data["train"], *loader_args, shuffle=True, device=device,
@@ -138,6 +163,7 @@ def run(args):
     preprocessing_seconds += time.perf_counter() - loaders_started
     config = {
         "checkpoint_format_version": 2, "metrics_format_version": 3, "model_name": model_name,
+        "execution_controls": controls.to_dict(), "training_recipe": getattr(args, 'recipe', 'custom'),
         "model_architecture": {"depths": list(model.depths), "channels": list(model.channels)}
         if hasattr(model, "depths") else {"name": model_name},
         "primary_evaluation_unit": "slice", "patient_separation": "frozen_patient_manifests",
@@ -162,7 +188,7 @@ def run(args):
         "train_pos_weight": pos_weight,
         "epochs_limit": args.epochs, "patience": args.patience, "min_delta": args.min_delta,
         "lr": args.lr, "weight_decay": args.weight_decay,
-        "lr_schedule": {"name": schedule_name, "warmup_epochs": warmup_epochs if schedule_name != "constant" else 0,
+        "lr_schedule": {"name": schedule_name, "warmup_epochs": warmup_epochs if schedule_name == "warmup_cosine" else 0,
                         "min_lr_ratio": min_lr_ratio if schedule_name != "constant" else 1.0},
         "training_sampling": sampling_config,
         "batch_size": args.batch_size, "workers": args.workers, "threads": args.threads,
@@ -173,6 +199,8 @@ def run(args):
         config.update(checkpoint_format_version=3, normalization=SCAN_NORMALIZATION,
                       preprocessing_config=preprocessing.to_dict(), preprocessing_crop_fit=crop_fit,
                       preprocessing_preparation_seconds=preprocessing_seconds)
+    if controls != ExecutionControls():
+        config['checkpoint_format_version'] = 4
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "config.json", config)
     preprocessing_audits = {}
@@ -186,6 +214,7 @@ def run(args):
     epoch_metrics = []
     training_peak = evaluation_peak = 0.0 if device.type == "cuda" else None
     print(f"Training {model_name}, augmentation={augmentation.name}, fold {args.fold} on {device}; "
+          f"loss={controls.loss}, precision={controls.precision}, input_channels={controls.input_channels}; "
           "selection uses early-stop scans only.", flush=True)
 
     for epoch in range(1, args.epochs + 1):
@@ -270,7 +299,8 @@ def run(args):
     if device.type == "cuda":
         evaluation_peak = max(evaluation_peak, cuda_peak_mib(device))
     training_and_evaluation_seconds = time.perf_counter() - started
-    report, patients = prediction_report(slices, scans, bins, reject_threshold)
+    report, patients = prediction_report(slices, scans, bins, reject_threshold,
+                                         patient_aggregation=controls.patient_aggregation)
     scores["patient"] = report["patient_metrics"]
     inference_profile = profile_inference(
         model, image_size, device, warmup=profile_warmup, repeats=profile_repeats,
@@ -282,7 +312,8 @@ def run(args):
         "evaluation_role": "development_inner_early_stop" if inner_only else "development_outer_validation",
         "evaluation_reuses_checkpoint_selection_patients": inner_only,
         "coursework_report": report,
-        "model_name": model_name,
+        "model_name": model_name, "execution_controls": controls.to_dict(),
+        "training_recipe": getattr(args, 'recipe', 'custom'),
         "augmentation": augmentation.name,
         "fold": args.fold, "best_epoch": best_epoch, "epochs_completed": len(history),
         "best_early_stop_scan_loss": best_loss, "manifest_sha256": data["manifest_sha256"],
@@ -323,8 +354,10 @@ def run(args):
     return result
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    """Parse explicit options over recipe defaults and execute one fresh run."""
+    parser = RecipeParser(description=__doc__)
+    add_execution_arguments(parser)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--splits-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -341,7 +374,7 @@ def main(argv=None):
                         help="Maximum absolute shift for pixel-shift profiles, integer 0-8 (default: 4).")
     parser.add_argument("--sampling", choices=SAMPLING_NAMES, default="slice_uniform",
                         help="Training only: original slice shuffle or class/patient-balanced draws.")
-    parser.add_argument("--lr-schedule", choices=("constant", "warmup_cosine"), default="constant")
+    parser.add_argument("--lr-schedule", choices=("constant", "warmup_cosine", "cosine"), default="constant")
     parser.add_argument("--warmup-epochs", type=int, default=2)
     parser.add_argument("--min-lr-ratio", type=float, default=0.01)
     parser.add_argument("--fold", type=int, default=1)

@@ -64,7 +64,9 @@ class ConvNeXtTiny(nn.Module):
     All weights are initialized locally. Stage depths and widths follow Tiny;
     the stochastic-depth probability increases from 0 to 0.1 across 18 blocks.
     Layer normalization uses no learned dataset statistics or running averages.
-    The input keeps the dataset's 240 x 256 shape, with no RGB conversion or crop.
+    Historical defaults use one channel and one AD logit. Optional input/head
+    controls support repeated grayscale and two-class cross entropy; preprocessing
+    and geometry belong to the dataset/CLI rather than this model.
     """
 
     depths = (3, 3, 9, 3)
@@ -74,9 +76,18 @@ class ConvNeXtTiny(nn.Module):
     stem_padding = 0
     max_drop_path = 0.1
 
-    def __init__(self):
+    def __init__(self, input_channels: int = 1, output_classes: int = 1,
+                 drop_path: float | None = None) -> None:
+        """Configure scratch input/head shapes while preserving historical defaults."""
         super().__init__()
-        self.stem = nn.Sequential(nn.Conv2d(1, self.channels[0], self.stem_kernel,
+        if input_channels not in (1, 3) or output_classes not in (1, 2):
+            raise ValueError("Input channels must be 1/3 and outputs 1/2.")
+        self.input_channels, self.output_classes = input_channels, output_classes
+        if drop_path is not None:
+            if not 0 <= drop_path < 1:
+                raise ValueError("DropPath must lie in [0, 1).")
+            self.max_drop_path = float(drop_path)
+        self.stem = nn.Sequential(nn.Conv2d(self.input_channels, self.channels[0], self.stem_kernel,
                                              stride=self.stem_stride, padding=self.stem_padding),
                                   LayerNorm2d(self.channels[0]))
         self.downsample_layers = nn.ModuleList([
@@ -93,7 +104,7 @@ class ConvNeXtTiny(nn.Module):
                 block_index += 1
             self.stages.append(nn.Sequential(*blocks))
         self.final_norm = nn.LayerNorm(self.channels[-1], eps=1e-6)
-        self.classifier = nn.Linear(self.channels[-1], 1)
+        self.classifier = nn.Linear(self.channels[-1], self.output_classes)
         self.apply(self._initialize_weights)
 
     @staticmethod
@@ -103,20 +114,21 @@ class ConvNeXtTiny(nn.Module):
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-    def forward(self, images):
-        """Return a binary logit per slice; spatial dimensions may be non-square."""
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """Return one BCE logit or two CE logits; dimensions may be non-square."""
         if (not isinstance(images, torch.Tensor) or images.ndim != 4
-                or images.shape[0] < 1 or images.shape[1] != 1
+                or images.shape[0] < 1 or images.shape[1] != self.input_channels
                 or min(images.shape[-2:]) < 32 or not images.is_floating_point()):
             raise ValueError(
-                "Expected floating-point [batch, 1, height, width] with batch >= 1 "
+                f"Expected floating-point [batch, {self.input_channels}, height, width] with batch >= 1 "
                 "and height/width >= 32."
             )
         features = self.stages[0](self.stem(images))
         for downsample, stage in zip(self.downsample_layers, self.stages[1:]):
             features = stage(downsample(features))
         pooled = self.final_norm(features.mean(dim=(2, 3)))
-        return self.classifier(pooled).squeeze(1)
+        logits = self.classifier(pooled)
+        return logits.squeeze(1) if self.output_classes == 1 else logits
 
 
 class ConvNeXtLite(ConvNeXtTiny):

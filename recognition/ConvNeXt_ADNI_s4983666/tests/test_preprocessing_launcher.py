@@ -31,6 +31,7 @@ class PreviewTests(unittest.TestCase):
                 self.assertEqual(status, 0)
                 process.assert_not_called()
                 self.assertIn('--epochs 30', stream.getvalue())
+                self.assertIn('--patience 30', stream.getvalue())
                 self.assertIn('--inner-only', stream.getvalue())
                 self.assertIn('--preprocessing ' + profile, stream.getvalue())
             self.assertFalse((base / 'runs').exists())
@@ -51,6 +52,18 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(command[command.index('--batch-size') + 1], '16')
         self.assertIn('/tmp/run with spaces/train/best.pt', replay)
         self.assertNotIn('--preprocessing', replay)
+
+    def test_default_patience_follows_budget_with_explicit_override(self) -> None:
+        """Changing only the epoch budget keeps a full run; explicit shorter patience is respected."""
+        for budget in (1, 15, 30, 60):
+            args = launcher.parser().parse_args(['--epochs', str(budget)])
+            launcher.validate(args)
+            self.assertEqual(args.patience, budget)
+            train, _ = launcher.commands(args, Path('/tmp/patience_preview'))
+            self.assertEqual(train[train.index('--patience') + 1], str(budget))
+        args = launcher.parser().parse_args(['--epochs', '30', '--patience', '10'])
+        launcher.validate(args)
+        self.assertEqual(args.patience, 10)
 
     def test_invalid_options_fail_before_submission(self) -> None:
         """Reject bad warmup, clipping configuration, protected output paths and CPU budgets."""

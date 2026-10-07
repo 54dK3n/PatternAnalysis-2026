@@ -50,7 +50,7 @@ def plot_history(output, history):
     import matplotlib.pyplot as plt
     epochs = [row["epoch"] for row in history]
     figure, axes = plt.subplots(1, 3, figsize=(14, 4), layout="constrained")
-    axes[0].plot(epochs, [r["train_slice_loss"] for r in history], marker="o", label="Train slice BCE (class-weighted)")
+    axes[0].plot(epochs, [r["train_slice_loss"] for r in history], marker="o", label="Train slice objective loss (configured)")
     axes[0].plot(epochs, [r["early_stop_scan_loss"] for r in history], marker="o", label="Early-stop scan log loss")
     axes[0].set(xlabel="Epoch", ylabel="Loss", title="Training and checkpoint selection")
     axes[1].plot(epochs, [r["early_stop_scan_accuracy"] for r in history], marker="o", label="Scan accuracy")
