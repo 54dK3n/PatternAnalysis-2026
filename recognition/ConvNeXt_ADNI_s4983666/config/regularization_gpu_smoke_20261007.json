@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "name": "regularization_gpu_smoke_20261007",
+  "cases": [
+    {
+      "id": "SM00_disabled",
+      "purpose": "Exact disabled-switch Tiny control.",
+      "overrides": {
+        "model": "convnext_tiny",
+        "preprocessing": "none",
+        "image_height": 224,
+        "image_width": 224,
+        "augmentation": "none",
+        "input_channels": 1,
+        "loss": "weighted_bce",
+        "precision": "fp32",
+        "patient_aggregation": "mean_probability",
+        "drop_path": 0.1,
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "batch_size": 32,
+        "lr_schedule": "constant",
+        "warmup_epochs": 0,
+        "min_lr_ratio": 0.0,
+        "epochs": 1,
+        "patience": 1,
+        "seed": 3710,
+        "sampling": "slice_uniform",
+        "label_smoothing": 0.0,
+        "mixup_alpha": 0.0
+      }
+    },
+    {
+      "id": "SM01_bce_mix_smooth",
+      "purpose": "Mixup and smoothing on weighted BCE FP32.",
+      "overrides": {
+        "model": "convnext_tiny",
+        "preprocessing": "none",
+        "image_height": 224,
+        "image_width": 224,
+        "augmentation": "none",
+        "input_channels": 1,
+        "loss": "weighted_bce",
+        "precision": "fp32",
+        "patient_aggregation": "mean_probability",
+        "drop_path": 0.1,
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "batch_size": 32,
+        "lr_schedule": "constant",
+        "warmup_epochs": 0,
+        "min_lr_ratio": 0.0,
+        "epochs": 1,
+        "patience": 1,
+        "seed": 3710,
+        "sampling": "slice_uniform",
+        "label_smoothing": 0.05,
+        "mixup_alpha": 0.1
+      }
+    },
+    {
+      "id": "SM02_ce_mix_bf16",
+      "purpose": "Mixup and smoothing on two-logit CE BF16.",
+      "overrides": {
+        "model": "convnext_tiny",
+        "preprocessing": "none",
+        "image_height": 224,
+        "image_width": 224,
+        "augmentation": "none",
+        "input_channels": 3,
+        "loss": "cross_entropy",
+        "precision": "amp_bf16",
+        "patient_aggregation": "mean_probability",
+        "drop_path": 0.1,
+        "lr": 0.0001,
+        "weight_decay": 0.05,
+        "batch_size": 32,
+        "lr_schedule": "constant",
+        "warmup_epochs": 0,
+        "min_lr_ratio": 0.0,
+        "epochs": 1,
+        "patience": 1,
+        "seed": 3710,
+        "sampling": "slice_uniform",
+        "label_smoothing": 0.1,
+        "mixup_alpha": 0.2
+      }
+    }
+  ]
+}

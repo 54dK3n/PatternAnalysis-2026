@@ -18,7 +18,7 @@ from torch import nn
 from typing import Any
 from utils.training_controls import (ExecutionControls, RecipeParser, add_execution_arguments,
     controls_from_args, attach_controls, validate_device, model_input, autocast_context,
-    ad_logits, make_criterion, model_controls)
+    ad_logits, make_criterion, model_controls, mixup_batch)
 
 from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
 from dataset.preprocessing import (SCAN_NORMALIZATION, add_preprocessing_arguments,
@@ -47,10 +47,27 @@ def train_epoch(model: nn.Module, loader: Any, optimizer: torch.optim.Optimizer,
         images = batch["image"].to(device, non_blocking=device.type == "cuda")
         labels = batch["label"].to(device, non_blocking=device.type == "cuda")
         optimizer.zero_grad(set_to_none=True)
+        controls = model_controls(model)
+        mixed, targets_a, targets_b, coefficient = mixup_batch(images, labels, controls.mixup_alpha)
         with autocast_context(model, device):
-            logits = model(model_input(model, images))
-            targets = labels.long() if model_controls(model).output_classes == 2 else labels
-            loss = criterion(logits, targets)
+            logits = model(model_input(model, mixed))
+            if controls.output_classes == 2:
+                targets_a, targets_b = targets_a.long(), targets_b.long()
+            loss = criterion(logits, targets_a)
+            if controls.mixup_alpha > 0:
+                # Both constituent labels use identical smoothing/weighting rules.
+                loss = coefficient * loss + (1 - coefficient) * criterion(logits, targets_b)
+        metric_logits = logits.detach()
+        if metrics_sink is not None and controls.mixup_alpha > 0:
+            # Mixed images have fractional labels: ordinary accuracy is undefined.
+            # Measure original minibatch inputs with a separate no-grad eval forward,
+            # before the update; do not update BatchNorm or consume DropPath RNG.
+            model.eval()
+            try:
+                with torch.no_grad(), autocast_context(model, device):
+                    metric_logits = model(model_input(model, images))
+            finally:
+                model.train()
         if not torch.isfinite(loss).item():
             raise ValueError("Training produced non-finite loss; no evaluation will be published.")
         scaler = getattr(model, '_grad_scaler', None)
@@ -65,7 +82,7 @@ def train_epoch(model: nn.Module, loader: Any, optimizer: torch.optim.Optimizer,
         count += labels.numel()
         if metrics_sink is not None:
             observed_labels.extend(int(v) for v in labels.detach().cpu().tolist())
-            observed_probabilities.extend(torch.sigmoid(ad_logits(model, logits.detach())).cpu().tolist())
+            observed_probabilities.extend(torch.sigmoid(ad_logits(model, metric_logits)).cpu().tolist())
     if metrics_sink is not None:
         metrics_sink.update(binary_metrics(observed_labels, observed_probabilities))
     return total_loss / count
@@ -259,7 +276,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "train_slice_accuracy": online_metrics["accuracy"],
             "train_slice_macro_f1": online_metrics["macro_f1"],
             "train_slice_auroc": online_metrics["auroc"],
-            "train_metrics_scope": "online_training_mode_augmented_when_configured",
+            "train_metrics_scope": ("online_unmixed_eval_mode_for_mixup" if controls.mixup_alpha > 0
+                                    else "online_training_mode_augmented_when_configured"),
             "train_seconds": train_seconds,
             "early_stop_slice_loss": early_scores["slice"]["log_loss"],
             "early_stop_slice_accuracy": early_scores["slice"]["accuracy"],
