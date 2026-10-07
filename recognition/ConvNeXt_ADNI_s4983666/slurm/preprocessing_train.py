@@ -22,6 +22,7 @@ from engine.scheduling import learning_rate
 from models.registry import MODEL_CHOICES
 from slurm.deploy_feature_source import frozen_seals
 from utils.artifacts import code_fingerprints, validate_output, write_json
+from utils.training_controls import (RecipeParser, add_execution_arguments, controls_from_args, checkpoint_controls, validate_device)
 
 # These flags are the public train.py interface; output and device are allocation-owned.
 TRAIN_OPTIONS = ('model', 'fold', 'epochs', 'patience', 'min_delta', 'batch_size', 'lr',
@@ -29,14 +30,17 @@ TRAIN_OPTIONS = ('model', 'fold', 'epochs', 'patience', 'min_delta', 'batch_size
                  'preprocessing', 'foreground_threshold', 'intensity_lower_percentile',
                  'intensity_upper_percentile', 'crop_margin', 'crop_height', 'crop_width',
                  'augmentation', 'rotation_degrees', 'translation_fraction', 'translation_pixels',
-                 'sampling', 'lr_schedule', 'warmup_epochs', 'min_lr_ratio')
+                 'sampling', 'lr_schedule', 'warmup_epochs', 'min_lr_ratio',
+                 'recipe', 'input_channels', 'loss', 'precision', 'patient_aggregation', 'drop_path')
 
 
 def parser() -> argparse.ArgumentParser:
     """Expose reproducible training options, with the tested pilot settings as defaults."""
-    result = argparse.ArgumentParser(description=__doc__)
+    result = RecipeParser(description=__doc__)
+    add_execution_arguments(result)
     result.add_argument('--dry-run', action='store_true', help='Print commands only; no jobs, data reads or output writes.')
     result.add_argument('--run', action='store_true', help=argparse.SUPPRESS)
+    result.add_argument('--dependency', default=None, help='Only afterok:JOBID[:JOBID] dependencies are supported.')
     work = SOURCE.parent
     result.add_argument('--data-root', type=Path, default=Path(os.environ.get('ADNI_DATA_ROOT', '/home/groups/comp3710/ADNI')))
     result.add_argument('--splits-dir', type=Path, default=Path(os.environ.get('ADNI_SPLITS_DIR', str(work / 'adni_splits_v1'))))
@@ -46,7 +50,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument('--model', choices=tuple(MODEL_CHOICES), default='convnext_lite')
     result.add_argument('--fold', type=int, choices=range(1, 6), default=1)
     result.add_argument('--epochs', type=int, default=30, help='Maximum epoch budget, not a course requirement.')
-    result.add_argument('--patience', type=int, default=5)
+    result.add_argument('--patience', type=int, default=None,
+                        help='Defaults to the epoch budget: no patience stop before the cap. Use a smaller value for early stopping.')
     result.add_argument('--min-delta', type=float, default=0.0001)
     result.add_argument('--batch-size', type=int, default=32)
     result.add_argument('--lr', type=float, default=0.0001)
@@ -63,7 +68,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument('--translation-fraction', type=float, default=0.03)
     result.add_argument('--translation-pixels', type=int, default=4)
     result.add_argument('--sampling', choices=SAMPLING_NAMES, default='slice_uniform')
-    result.add_argument('--lr-schedule', choices=('constant', 'warmup_cosine'), default='constant')
+    result.add_argument('--lr-schedule', choices=('constant', 'warmup_cosine', 'cosine'), default='constant')
     result.add_argument('--warmup-epochs', type=int, default=2)
     result.add_argument('--min-lr-ratio', type=float, default=0.01)
     return result
@@ -71,6 +76,10 @@ def parser() -> argparse.ArgumentParser:
 
 def validate(args: argparse.Namespace) -> None:
     """Reject invalid controls before submitting a costly allocation."""
+    if args.dependency is not None and not re.fullmatch(r'afterok:[0-9]+(?::[0-9]+)*', args.dependency):
+        raise ValueError('Dependency must require successful completion: afterok:JOBID[:JOBID].')
+    if args.patience is None:
+        args.patience = args.epochs
     for path in (args.data_root, args.splits_dir, args.runs_root):
         if not path.is_absolute():
             raise ValueError('Data, split and run paths must be absolute.')
@@ -92,6 +101,9 @@ def validate(args: argparse.Namespace) -> None:
     minimum = 16 if MODEL_CHOICES[args.model] == 'small_cnn_v1' else 32
     if min(args.image_height, args.image_width) < minimum:
         raise ValueError('Image dimensions are below the model minimum.')
+    controls = controls_from_args(args)
+    if MODEL_CHOICES[args.model] == 'small_cnn_v1' and controls.drop_path is not None:
+        raise ValueError('DropPath applies to ConvNeXt only.')
     preprocessing_from_args(args)
     make_augmentation(args.augmentation, rotation_degrees=args.rotation_degrees,
                       translation_fraction=args.translation_fraction, translation_pixels=args.translation_pixels)
@@ -103,8 +115,11 @@ def options(args: argparse.Namespace) -> list[str]:
     result = ['--data-root', str(args.data_root), '--splits-dir', str(args.splits_dir),
               '--runs-root', str(args.runs_root), '--time-limit', args.time_limit,
               '--cpus-per-task', str(args.cpus_per_task)]
+    if args.dependency is not None:
+        result.extend(['--dependency', args.dependency])
     for name in TRAIN_OPTIONS:
-        result.extend(['--' + name.replace('_', '-'), str(getattr(args, name))])
+        if getattr(args, name) is not None:
+            result.extend(['--' + name.replace('_', '-'), str(getattr(args, name))])
     return result
 
 
@@ -114,7 +129,8 @@ def commands(args: argparse.Namespace, output: Path) -> list[list[str]]:
     train = [sys.executable, '-u', str(SOURCE / 'train.py'), *common,
              '--output', str(output / 'train'), '--inner-only', '--device', 'cuda']
     for name in TRAIN_OPTIONS:
-        train.extend(['--' + name.replace('_', '-'), str(getattr(args, name))])
+        if getattr(args, name) is not None:
+            train.extend(['--' + name.replace('_', '-'), str(getattr(args, name))])
     replay = [sys.executable, '-u', str(SOURCE / 'predict.py'), *common,
               '--checkpoint', str(output / 'train/best.pt'), '--output', str(output / 'replay'),
               '--role', 'early_stop', '--device', 'cuda', '--skip-inference-profile',
@@ -148,6 +164,9 @@ def verify(output: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError('Requested budget/seed/fold differs from the saved run.')
     if config['manifest_sha256'] != replayed['manifest_sha256'] or config['code_sha256'] != code_fingerprints():
         raise ValueError('Source or frozen manifest identity differs.')
+    controls = controls_from_args(args)
+    if checkpoint_controls(config) != controls or replayed.get('execution_controls', controls.to_dict()) != controls.to_dict():
+        raise ValueError('Execution controls differ between request, checkpoint and replay.')
     requested, resolved = preprocessing_from_args(args), checkpoint_preprocessing(config)
     if requested.name != resolved.name or (requested.name != 'none' and any(
             getattr(requested, name) != getattr(resolved, name) for name in
@@ -192,6 +211,7 @@ def verify(output: Path, args: argparse.Namespace) -> dict[str, Any]:
             'checkpoint_sha256': hashlib.sha256((output / 'train/best.pt').read_bytes()).hexdigest(),
             'image_size': config['image_size'], 'preprocessing_config': config.get('preprocessing_config'),
             'metrics': trained['metrics'], 'resources': trained['resources'],
+            'execution_controls': controls.to_dict(), 'training_recipe': config.get('training_recipe', 'custom'),
             'limitations': ['Early-stop patients select and evaluate this model; this is not independent final-test accuracy.',
                             'Preprocessing branches can use different canvas sizes; report geometry/resource differences.']}
 
@@ -211,10 +231,12 @@ def main(argv: list[str] | None = None) -> int:
                   '--cpus-per-task=' + str(args.cpus_per_task), '--output=' + str(logs / 'preprocessing_train_%j.out'),
                   '--error=' + str(logs / 'preprocessing_train_%j.err'), str(SOURCE / 'slurm/preprocessing_train.sbatch'),
                   str(SOURCE), *options(args)]
+        if args.dependency is not None:
+            submit.insert(1, '--dependency=' + args.dependency)
         print('Submission:', shlex.join(submit), flush=True)
         for stage, command in zip(('Train', 'Replay'), planned):
             print(stage + ':', shlex.join(command), flush=True)
-        print('Protocol: scratch initialization; inner early-stop selection/evaluation; AdamW + weighted BCE; FP32; no label smoothing.', flush=True)
+        print(f'Protocol: scratch initialization; inner early-stop selection/evaluation; AdamW; loss={args.loss}; precision={args.precision}; input_channels={args.input_channels}; patient_aggregation={args.patient_aggregation}.', flush=True)
         if args.dry_run:
             return 0
         if not args.run:
@@ -227,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         import torch
         if not torch.cuda.is_available():
             raise ValueError('CUDA unavailable; training was not started.')
+        validate_device(controls_from_args(args), torch.device('cuda'))
         output = validate_output(output, args.data_root, args.splits_dir)
         output.mkdir(parents=True, exist_ok=False)
         before = frozen_seals(args.splits_dir)

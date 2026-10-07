@@ -11,6 +11,7 @@ import sys
 
 import torch
 
+from utils.training_controls import checkpoint_controls, attach_controls, validate_device
 from models.registry import validate_feature_architecture
 
 from dataset.augmentation import AugmentationConfig
@@ -33,10 +34,11 @@ def run(args):
     output = validate_output(args.output, args.data_root, args.splits_dir)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     config = checkpoint["config"]
-    if config["checkpoint_format_version"] not in (1, 2, 3) or config["model_name"] not in MODEL_NAMES:
+    if config["checkpoint_format_version"] not in (1, 2, 3, 4) or config["model_name"] not in MODEL_NAMES:
         raise ValueError("Unsupported checkpoint format or model architecture.")
     if config["aggregation"] != "mean_slice_AD_probability" or config["threshold"] != 0.5:
         raise ValueError("Unsupported aggregation or decision rule.")
+    controls = checkpoint_controls(config)
     preprocessing = checkpoint_preprocessing(config)
     if config["calibration"] != "not_fitted":
         raise ValueError("Unsupported checkpoint calibration.")
@@ -69,13 +71,17 @@ def run(args):
     seed_everything(config["seed"])
     torch.set_num_threads(args.threads)
     device = select_device(args.device)
+    validate_device(controls, device)
     # Architecture dispatch is recorded in the checkpoint, never inferred from its filename.
-    model = create_model(config["model_name"]).to(device)
+    model = create_model(config["model_name"], input_channels=controls.input_channels,
+                         output_classes=controls.output_classes, drop_path=controls.drop_path).to(device)
+    attach_controls(model, controls)
     model.load_state_dict(checkpoint["model_state"])
     loader = make_loader(data[role], args.data_root, tuple(image_size),
                          args.batch_size, args.workers, config["seed"], False, device, role=role, preprocessing=preprocessing)
     scores, slices, scans = evaluate(model, loader, device, config["expected_slices"])
-    report, patients = prediction_report(slices, scans, bins, reject_threshold)
+    report, patients = prediction_report(slices, scans, bins, reject_threshold,
+                                         patient_aggregation=controls.patient_aggregation)
     scores["patient"] = report["patient_metrics"]
     resources = profile_inference(
         model, tuple(image_size), device, enabled=not getattr(args, "skip_inference_profile", False),
@@ -93,7 +99,8 @@ def run(args):
         "evaluation_role": "development_inner_early_stop" if role == "early_stop" else "development_outer_validation",
         "evaluation_reuses_checkpoint_selection_patients": role == "early_stop",
         "coursework_report": report, "inference_profile": resources, "failure_examples": failures,
-        "model_name": config["model_name"],
+        "model_name": config["model_name"], "execution_controls": controls.to_dict(),
+        "training_recipe": config.get('training_recipe', 'custom'),
         "fold": config["fold"], "checkpoint_epoch": checkpoint["epoch"],
         "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
         "manifest_sha256": data["manifest_sha256"], "calibration": "not_fitted",

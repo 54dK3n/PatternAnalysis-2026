@@ -7,6 +7,7 @@ import time
 import torch
 
 from utils.runtime import sync_device
+from utils.training_controls import autocast_context, model_controls
 
 
 def cuda_peak_mib(device: torch.device) -> float | None:
@@ -30,8 +31,9 @@ def profile_inference(model: torch.nn.Module, image_size: tuple[int, int], devic
     if not batch_sizes or any(type(n) is not int or n < 1 for n in batch_sizes):
         raise ValueError("Profile batch sizes must be positive integers.")
     result = {"status": "measured", "device": str(device), "warmup": warmup,
-              "repeats": repeats, "input_shape": [1, *image_size],
+              "repeats": repeats, "input_shape": [getattr(model, "input_channels", 1), *image_size],
               "publication_protocol_complete": warmup >= 10 and repeats >= 100,
+              "precision": model_controls(model).precision,
               "timing_scope": "device_resident_forward_only_excludes_loading_and_transfer",
               "batches": []}
     if not enabled or (device.type != "cuda" and not on_cpu):
@@ -46,15 +48,17 @@ def profile_inference(model: torch.nn.Module, image_size: tuple[int, int], devic
             try:
                 if device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(device)
-                images = torch.zeros(batch_size, 1, *image_size, device=device)
+                images = torch.zeros(batch_size, getattr(model, "input_channels", 1), *image_size, device=device)
                 for _ in range(warmup):
-                    model(images)
+                    with autocast_context(model, device):
+                        model(images)
                 sync_device(device)
                 elapsed = []
                 for _ in range(repeats):
                     sync_device(device)
                     started = time.perf_counter()
-                    logits = model(images)
+                    with autocast_context(model, device):
+                        logits = model(images)
                     sync_device(device)
                     elapsed.append((time.perf_counter() - started) * 1000)
                 if not torch.isfinite(logits).all().item():

@@ -6,6 +6,7 @@ import torch
 
 from evaluation.metrics import aggregate_scans, binary_metrics
 from utils.runtime import sync_device
+from utils.training_controls import ad_logits, autocast_context, model_controls, model_input, ExecutionControls
 
 
 @torch.inference_mode()
@@ -18,25 +19,33 @@ def evaluate(model, loader, device, expected_slices):
     model.eval()
     predictions = []
     forward_seconds = 0.0
+    extended_export = model_controls(model) != ExecutionControls()
     for batch in loader:
         images = batch["image"].to(device, non_blocking=device.type == "cuda")
         sync_device(device)
         started = time.perf_counter()
-        logits = model(images)
+        with autocast_context(model, device):
+            logits = model(model_input(model, images))
         sync_device(device)
         forward_seconds += time.perf_counter() - started
         if not torch.isfinite(logits).all().item():
             raise ValueError("Model produced non-finite logits; evaluation stopped.")
-        probabilities = torch.sigmoid(logits).cpu().tolist()
+        margins = ad_logits(model, logits)
+        if not torch.isfinite(margins).all().item():
+            raise ValueError('Model produced non-finite AD margins; evaluation stopped.')
+        probabilities = torch.sigmoid(margins).cpu().tolist()
         for index, probability in enumerate(probabilities):
-            predictions.append({
+            row = {
                 "patient_id": batch["patient_id"][index],
                 "image_id": batch["image_id"][index],
                 "slice_index": int(batch["slice_index"][index]),
                 "relative_path": batch["relative_path"][index],
                 "label": int(batch["label"][index]),
                 "probability": probability,
-            })
+            }
+            if extended_export:
+                row['ad_logit'] = float(margins[index].cpu())
+            predictions.append(row)
     scans = aggregate_scans(predictions, expected_slices=expected_slices)
     scores = {
         level: binary_metrics([r["label"] for r in rows], [r["probability"] for r in rows])

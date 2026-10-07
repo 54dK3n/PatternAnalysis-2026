@@ -68,24 +68,33 @@ def confidence_metrics(labels: list[int], probabilities: list[float], bins: int 
     }
 
 
-def aggregate_patients(slices: list[dict]) -> tuple[list[dict], dict]:
+def aggregate_patients(slices: list[dict], aggregation: str = "mean_probability") -> tuple[list[dict], dict]:
     """Average all slice probabilities only when every patient has one diagnosis.
 
     Never silently assign a label to a longitudinal patient whose diagnoses
     differ. In that case the entire patient-level summary is unavailable.
     """
+    if aggregation not in ('mean_probability', 'mean_logit'):
+        raise ValueError('Unsupported patient aggregation.')
     groups = {}
     for row in slices:
         groups.setdefault(row["patient_id"], []).append(row)
     mixed = sum(len({r["label"] for r in rows}) > 1 for rows in groups.values())
     status = {"status": "unavailable_mixed_diagnoses" if mixed else "available",
               "n_patients": len(groups), "mixed_diagnosis_patients": mixed,
-              "aggregation": "mean_all_slice_AD_probability"}
+              "aggregation": "mean_all_slice_AD_probability" if aggregation == 'mean_probability' else 'sigmoid_mean_all_slice_AD_logit'}
     if mixed:
         return [], status
     result = []
     for patient, rows in sorted(groups.items()):
-        probability = math.fsum(r["probability"] for r in rows) / len(rows)
+        if aggregation == 'mean_logit':
+            values = [r.get('ad_logit') for r in rows]
+            if any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
+                raise ValueError('Logit aggregation requires finite original AD logits.')
+            margin = math.fsum(values) / len(values)
+            probability = 1 / (1 + math.exp(-margin)) if margin >= 0 else math.exp(margin) / (1 + math.exp(margin))
+        else:
+            probability = math.fsum(r["probability"] for r in rows) / len(rows)
         result.append({"patient_id": patient, "label": rows[0]["label"],
                        "probability": probability, "prediction": int(probability >= 0.5),
                        "num_slices": len(rows), "num_scans": len({r["image_id"] for r in rows})})
@@ -93,9 +102,9 @@ def aggregate_patients(slices: list[dict]) -> tuple[list[dict], dict]:
 
 
 def prediction_report(slices: list[dict], scans: list[dict], bins: int = 15,
-                      reject_threshold: float = 0.8) -> tuple[dict, list[dict]]:
+                      reject_threshold: float = 0.8, patient_aggregation: str = "mean_probability") -> tuple[dict, list[dict]]:
     """Describe fixed predictions without tuning or changing a checkpoint."""
-    patients, patient_status = aggregate_patients(slices)
+    patients, patient_status = aggregate_patients(slices, patient_aggregation)
     rows_by_unit = {"slice": slices, "scan": scans}
     if patients:
         rows_by_unit["patient"] = patients
