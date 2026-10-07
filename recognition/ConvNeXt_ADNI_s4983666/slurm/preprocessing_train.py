@@ -31,7 +31,7 @@ TRAIN_OPTIONS = ('model', 'fold', 'epochs', 'patience', 'min_delta', 'batch_size
                  'intensity_upper_percentile', 'crop_margin', 'crop_height', 'crop_width',
                  'augmentation', 'rotation_degrees', 'translation_fraction', 'translation_pixels',
                  'sampling', 'lr_schedule', 'warmup_epochs', 'min_lr_ratio',
-                 'recipe', 'input_channels', 'loss', 'precision', 'patient_aggregation', 'drop_path')
+                 'recipe', 'input_channels', 'loss', 'precision', 'patient_aggregation', 'drop_path', 'label_smoothing', 'mixup_alpha')
 
 
 def parser() -> argparse.ArgumentParser:

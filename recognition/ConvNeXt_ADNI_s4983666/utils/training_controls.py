@@ -65,6 +65,8 @@ class ExecutionControls:
     precision: str = 'fp32'
     patient_aggregation: str = 'mean_probability'
     drop_path: float | None = None
+    label_smoothing: float = 0.0
+    mixup_alpha: float = 0.0
 
     def __post_init__(self) -> None:
         """Reject unsupported shapes/objectives rather than silently falling back."""
@@ -80,6 +82,13 @@ class ExecutionControls:
                 or not math.isfinite(self.drop_path) or not 0 <= self.drop_path < 1):
             raise ValueError('DropPath must be finite in [0, 1).')
 
+        if (type(self.label_smoothing) not in (int, float) or not math.isfinite(self.label_smoothing)
+                or not 0 <= self.label_smoothing < 1):
+            raise ValueError('Label smoothing must be finite in [0, 1).')
+        if (type(self.mixup_alpha) not in (int, float) or not math.isfinite(self.mixup_alpha)
+                or not 0 <= self.mixup_alpha <= 1):
+            raise ValueError('Mixup alpha must be finite in [0, 1]; zero disables mixing.')
+
     @property
     def output_classes(self) -> int:
         """CE has two raw logits; BCE has one AD-versus-NC logit."""
@@ -87,14 +96,24 @@ class ExecutionControls:
 
     def to_dict(self) -> dict[str, Any]:
         """Bind executable controls to a closed algorithm version."""
-        return {**asdict(self), 'algorithm': 'scratch_execution_v1'}
+        values = asdict(self)
+        if self.label_smoothing == 0 and self.mixup_alpha == 0:
+            # Retain exact legacy metadata and RNG behavior with switches disabled.
+            del values['label_smoothing'], values['mixup_alpha']
+            return {**values, 'algorithm': 'scratch_execution_v1'}
+        return {**values, 'algorithm': 'scratch_execution_v2'}
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> 'ExecutionControls':
         """Reject missing/extra fields and changed control versions in checkpoints."""
-        if type(value) is not dict or set(value) != set(cls.__dataclass_fields__) | {'algorithm'}:
+        if type(value) is not dict:
             raise ValueError('Incomplete or unsupported execution controls.')
-        controls = cls(**{name: value[name] for name in cls.__dataclass_fields__})
+        fields = set(cls.__dataclass_fields__)
+        if value.get('algorithm') == 'scratch_execution_v1':
+            fields -= {'label_smoothing', 'mixup_alpha'}
+        if set(value) != fields | {'algorithm'}:
+            raise ValueError('Incomplete or unsupported execution controls.')
+        controls = cls(**{name: value[name] for name in fields})
         if value != controls.to_dict():
             raise ValueError('Changed execution control version.')
         return controls
@@ -108,6 +127,10 @@ def add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--loss', choices=('bce', 'weighted_bce', 'cross_entropy', 'weighted_cross_entropy'), default='weighted_bce')
     parser.add_argument('--precision', choices=('fp32', 'amp_fp16', 'amp_bf16'), default='fp32')
     parser.add_argument('--patient-aggregation', choices=('mean_probability', 'mean_logit'), default='mean_probability')
+    parser.add_argument('--label-smoothing', type=float, default=0.0,
+                        help='Training targets: (1-epsilon)*target + epsilon/2; zero disables smoothing.')
+    parser.add_argument('--mixup-alpha', type=float, default=0.0,
+                        help='Train-only batch Mixup Beta(alpha, alpha), range [0,1]; zero disables mixing.')
     parser.add_argument('--drop-path', type=float, default=None, help='Omitted: architecture default; zero disables stochastic depth.')
 
 
@@ -171,5 +194,39 @@ def make_criterion(controls: ExecutionControls, pos_weight: float, device: torch
     """Use original training counts; balanced sampling supplies a unit class prior."""
     if controls.output_classes == 2:
         weight = torch.tensor([1., pos_weight], device=device) if controls.loss == 'weighted_cross_entropy' else None
-        return nn.CrossEntropyLoss(weight=weight)
-    return nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight if controls.loss == 'weighted_bce' else 1., device=device))
+        return nn.CrossEntropyLoss(weight=weight, label_smoothing=controls.label_smoothing)
+    base = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight if controls.loss == 'weighted_bce' else 1., device=device))
+    return SmoothedBinaryLoss(base, controls.label_smoothing) if controls.label_smoothing else base
+
+
+class SmoothedBinaryLoss(nn.Module):
+    """Smooth a binary target toward a uniform prior before weighted BCE.
+
+    Uses the same two-class uniform-mixture convention as PyTorch CE:
+    https://docs.pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html
+    Class weight is applied by BCE after smoothing, never fitted on evaluation data.
+    """
+
+    def __init__(self, criterion: nn.Module, epsilon: float) -> None:
+        """Keep the original BCE reduction and positive-class weighting."""
+        super().__init__()
+        self.criterion, self.epsilon = criterion, epsilon
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Use fractional targets without rounding them to class indices."""
+        return self.criterion(logits, targets * (1 - self.epsilon) + self.epsilon / 2)
+
+
+def mixup_batch(images: torch.Tensor, labels: torch.Tensor, alpha: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+    """Mix only the current training minibatch, with one Beta draw and permutation.
+
+    Zhang et al., mixup: Beyond Empirical Risk Minimization (ICLR 2018):
+    https://arxiv.org/abs/1710.09412
+    No sample/label is fetched from another loader or role. Disabled mixing
+    consumes no RNG draws, preserving legacy runs; singleton batches are unchanged.
+    """
+    if alpha == 0 or labels.numel() < 2:
+        return images, labels, labels, 1.0
+    coefficient = float(torch.distributions.Beta(alpha, alpha).sample().item())
+    permutation = torch.randperm(labels.numel(), device=images.device)
+    return coefficient * images + (1 - coefficient) * images[permutation], labels, labels[permutation], coefficient

@@ -81,3 +81,12 @@ actual software and device versions are stored with every run. See
 [training recipes](TRAINING_RECIPES.md), [GPU workflow](RECIPE_GPU_EXPERIMENTS.md),
 [follow-up plan](RECIPE_FOLLOWUP_EXPERIMENTS.md) and
 [coursework metrics](COURSEWORK_LOGGING.md).
+
+## Subsequent optional regularization work
+
+Ken subsequently authorized Mixup/label-smoothing trials. The default-off
+controls and fixed eight-case plan are described in
+[regularization experiments](REGULARIZATION_EXPERIMENTS.md). All 222 synthetic
+tests passed in 114.720s after this change. These later edits are separate from
+the earlier Git push and do not change the original running Rangpur snapshot.
+GPU results remain pending until the isolated-source jobs complete.

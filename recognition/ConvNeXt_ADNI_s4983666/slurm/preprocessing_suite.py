@@ -141,7 +141,7 @@ def summary_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                'seed_base': args.seed, 'seed_effective': args.seed + args.fold,
                'model': args.model, 'recipe': args.recipe, 'input_channels': args.input_channels,
                'loss': args.loss, 'precision': args.precision, 'patient_aggregation': args.patient_aggregation,
-               'drop_path': args.drop_path,
+               'drop_path': args.drop_path, 'label_smoothing': args.label_smoothing, 'mixup_alpha': args.mixup_alpha,
                'preprocessing': args.preprocessing, 'augmentation': args.augmentation,
                'sampling': args.sampling, 'lr': args.lr, 'weight_decay': args.weight_decay,
                'lr_schedule': args.lr_schedule, 'epochs_limit': args.epochs,

@@ -494,3 +494,10 @@ referrals and overall accuracy from the one-time final evaluation.
 - [Authors' ConvNeXt implementation](https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py): architectural reference; local models use scratch weights.
 - [PyTorch reproducibility](https://docs.pytorch.org/docs/2.6/notes/randomness.html).
 - [Coursework logging protocol and checked staff clarifications](docs/COURSEWORK_LOGGING.md).
+
+### Additional train-only regularization comparison
+
+`--label-smoothing` and `--mixup-alpha` are optional and default to zero.
+See [regularization controls, fixed cases and metric scope](docs/REGULARIZATION_EXPERIMENTS.md).
+New GPU validation/results remain pending until recorded; existing queued
+recipe jobs retain their original immutable source snapshot.
