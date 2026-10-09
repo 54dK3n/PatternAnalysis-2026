@@ -1,8 +1,9 @@
-"""Native PyTorch ConvNeXt-Tiny with a grayscale stem and binary AD/NC output.
+"""ConvNeXt for grayscale MRI slices, implemented from scratch in PyTorch.
 
-Architecture: Liu et al., "A ConvNet for the 2020s":
-https://arxiv.org/abs/2201.03545 . The authors' reference implementation is
-https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py .
+Architecture: Liu et al., "A ConvNet for the 2020s", CVPR 2022,
+https://arxiv.org/abs/2201.03545 . The authors' reference implementation
+(https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py)
+was consulted for the block layout; all weights are randomly initialized here.
 """
 
 import torch
@@ -10,26 +11,31 @@ from torch import nn
 
 
 class LayerNorm2d(nn.LayerNorm):
-    """Normalize channels independently at each spatial location of an NCHW tensor."""
+    """LayerNorm over channels at every pixel of an NCHW tensor (channels-first)."""
 
-    def __init__(self, channels):
+    def __init__(self, channels: int) -> None:
         super().__init__(channels, eps=1e-6)
 
-    def forward(self, features):
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
         channels_last = features.permute(0, 2, 3, 1)
         return super().forward(channels_last).permute(0, 3, 1, 2)
 
 
 class StochasticDepth(nn.Module):
-    """Drop a whole residual branch per image during training, preserving its mean."""
+    """Drop a whole residual branch per image during training (DropPath).
 
-    def __init__(self, probability):
+    Huang et al., "Deep Networks with Stochastic Depth", ECCV 2016. Surviving
+    branches are divided by the survival probability so the expected output
+    is unchanged; evaluation is deterministic.
+    """
+
+    def __init__(self, probability: float) -> None:
         super().__init__()
         if not 0.0 <= probability < 1.0:
             raise ValueError("Stochastic-depth probability must be in [0, 1).")
         self.probability = float(probability)
 
-    def forward(self, residual):
+    def forward(self, residual: torch.Tensor) -> torch.Tensor:
         if not self.training or self.probability == 0.0:
             return residual
         survival = 1.0 - self.probability
@@ -39,19 +45,20 @@ class StochasticDepth(nn.Module):
 
 
 class ConvNeXtBlock(nn.Module):
-    """A depthwise spatial convolution followed by a channel expansion and residual."""
+    """7x7 depthwise conv -> LayerNorm -> 4x MLP (GELU) -> layer scale -> residual."""
 
-    def __init__(self, channels, drop_probability):
+    def __init__(self, channels: int, drop_probability: float) -> None:
         super().__init__()
         self.depthwise = nn.Conv2d(channels, channels, 7, padding=3, groups=channels)
         self.norm = nn.LayerNorm(channels, eps=1e-6)
+        # 1x1 convolutions written as Linear layers on channels-last tensors.
         self.expand = nn.Linear(channels, 4 * channels)
         self.activation = nn.GELU()
         self.project = nn.Linear(4 * channels, channels)
         self.layer_scale = nn.Parameter(torch.full((channels,), 1e-6))
         self.drop_path = StochasticDepth(drop_probability)
 
-    def forward(self, features):
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
         residual = self.depthwise(features).permute(0, 2, 3, 1)
         residual = self.project(self.activation(self.expand(self.norm(residual))))
         residual = (residual * self.layer_scale).permute(0, 3, 1, 2)
@@ -59,105 +66,66 @@ class ConvNeXtBlock(nn.Module):
 
 
 class ConvNeXtTiny(nn.Module):
-    """ConvNeXt-Tiny for grayscale slices normalized to [-1, 1].
+    """ConvNeXt-Tiny with a configurable input channel count and one AD logit.
 
-    All weights are initialized locally. Stage depths and widths follow Tiny;
-    the stochastic-depth probability increases from 0 to 0.1 across 18 blocks.
-    Layer normalization uses no learned dataset statistics or running averages.
-    Historical defaults use one channel and one AD logit. Optional input/head
-    controls support repeated grayscale and two-class cross entropy; preprocessing
-    and geometry belong to the dataset/CLI rather than this model.
+    ``input_channels`` is 1 for a single slice or 3 for a slice stacked with
+    its two neighbours. DropPath rises linearly from 0 to ``drop_path`` across
+    the blocks, as in the paper.
     """
 
     depths = (3, 3, 9, 3)
     channels = (96, 192, 384, 768)
-    stem_kernel = 4
-    stem_stride = 4
-    stem_padding = 0
-    max_drop_path = 0.1
 
-    def __init__(self, input_channels: int = 1, output_classes: int = 1,
-                 drop_path: float | None = None) -> None:
-        """Configure scratch input/head shapes while preserving historical defaults."""
+    def __init__(self, input_channels: int = 1, drop_path: float = 0.1) -> None:
         super().__init__()
-        if input_channels not in (1, 3) or output_classes not in (1, 2):
-            raise ValueError("Input channels must be 1/3 and outputs 1/2.")
-        self.input_channels, self.output_classes = input_channels, output_classes
-        if drop_path is not None:
-            if not 0 <= drop_path < 1:
-                raise ValueError("DropPath must lie in [0, 1).")
-            self.max_drop_path = float(drop_path)
-        self.stem = nn.Sequential(nn.Conv2d(self.input_channels, self.channels[0], self.stem_kernel,
-                                             stride=self.stem_stride, padding=self.stem_padding),
+        if input_channels not in (1, 3):
+            raise ValueError("input_channels must be 1 or 3.")
+        if not 0.0 <= drop_path < 1.0:
+            raise ValueError("drop_path must be in [0, 1).")
+        self.input_channels = input_channels
+        # Stem: non-overlapping 4x4 "patchify" convolution followed by LayerNorm.
+        self.stem = nn.Sequential(nn.Conv2d(input_channels, self.channels[0], 4, stride=4),
                                   LayerNorm2d(self.channels[0]))
+        # Between stages: LayerNorm then a 2x2 stride-2 convolution.
         self.downsample_layers = nn.ModuleList([
             nn.Sequential(LayerNorm2d(previous), nn.Conv2d(previous, current, 2, stride=2))
             for previous, current in zip(self.channels[:-1], self.channels[1:])
         ])
+        total_blocks = sum(self.depths)
         self.stages = nn.ModuleList()
         block_index = 0
         for channels, depth in zip(self.channels, self.depths):
             blocks = []
             for _ in range(depth):
-                probability = self.max_drop_path * block_index / (sum(self.depths) - 1)
-                blocks.append(ConvNeXtBlock(channels, probability))
+                blocks.append(ConvNeXtBlock(channels, drop_path * block_index / (total_blocks - 1)))
                 block_index += 1
             self.stages.append(nn.Sequential(*blocks))
+        # Head: global average pooling -> LayerNorm -> Linear.
         self.final_norm = nn.LayerNorm(self.channels[-1], eps=1e-6)
-        self.classifier = nn.Linear(self.channels[-1], self.output_classes)
+        self.classifier = nn.Linear(self.channels[-1], 1)
         self.apply(self._initialize_weights)
 
     @staticmethod
-    def _initialize_weights(module):
+    def _initialize_weights(module: nn.Module) -> None:
+        """Random truncated-normal initialization (std 0.02) as in the paper."""
         if isinstance(module, (nn.Conv2d, nn.Linear)):
             nn.init.trunc_normal_(module.weight, std=0.02)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """Return one BCE logit or two CE logits; dimensions may be non-square."""
-        if (not isinstance(images, torch.Tensor) or images.ndim != 4
-                or images.shape[0] < 1 or images.shape[1] != self.input_channels
-                or min(images.shape[-2:]) < 32 or not images.is_floating_point()):
-            raise ValueError(
-                f"Expected floating-point [batch, {self.input_channels}, height, width] with batch >= 1 "
-                "and height/width >= 32."
-            )
+        """Map [batch, channels, height, width] images to [batch] AD logits."""
+        if images.ndim != 4 or images.shape[1] != self.input_channels or min(images.shape[-2:]) < 32:
+            raise ValueError(f"Expected [batch, {self.input_channels}, height, width] with sides >= 32.")
         features = self.stages[0](self.stem(images))
         for downsample, stage in zip(self.downsample_layers, self.stages[1:]):
             features = stage(downsample(features))
         pooled = self.final_norm(features.mean(dim=(2, 3)))
-        logits = self.classifier(pooled)
-        return logits.squeeze(1) if self.output_classes == 1 else logits
+        return self.classifier(pooled).squeeze(1)
 
 
 class ConvNeXtLite(ConvNeXtTiny):
-    """Smaller scratch ConvNeXt retaining Tiny's block and downsampling design.
-
-    This is a separate checkpoint architecture; Tiny's names and tensor shapes
-    are unchanged. Depths (2, 2, 6, 2) and channels (48, 96, 192, 384) reduce
-    resource demand. Real-data results are recorded separately from this definition.
-    """
+    """Smaller ConvNeXt with the same blocks: depths (2, 2, 6, 2), widths (48 ... 384)."""
 
     depths = (2, 2, 6, 2)
     channels = (48, 96, 192, 384)
-
-
-class ConvNeXtLiteOverlap(ConvNeXtLite):
-    """Scratch Lite with an overlapping 7x7, stride-four, padded stem."""
-
-    stem_kernel = 7
-    stem_padding = 3
-
-
-class ConvNeXtLiteStride2(ConvNeXtLite):
-    """Scratch Lite retaining more spatial samples using a stride-two stem."""
-
-    stem_stride = 2
-    stem_padding = 1
-
-
-class ConvNeXtLiteNoDrop(ConvNeXtLite):
-    """Scratch Lite with stochastic depth disabled at every block."""
-
-    max_drop_path = 0.0

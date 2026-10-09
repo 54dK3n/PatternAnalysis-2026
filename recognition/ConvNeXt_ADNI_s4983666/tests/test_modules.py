@@ -71,24 +71,24 @@ class ModelTests(unittest.TestCase):
                     logits = model(torch.zeros(shape))
                     self.assertEqual(tuple(logits.shape), (shape[0],))
                     self.assertTrue(torch.isfinite(logits).all().item())
-        invalid = [None, torch.zeros(1, 32, 32), torch.zeros(1, 3, 32, 32),
-                   torch.zeros(1, 1, 31, 64), torch.zeros(1, 1, 64, 31),
-                   torch.zeros(0, 1, 32, 32), torch.zeros(1, 1, 32, 32, dtype=torch.uint8)]
+        invalid = [torch.zeros(1, 32, 32), torch.zeros(1, 3, 32, 32),
+                   torch.zeros(1, 1, 31, 64), torch.zeros(1, 1, 64, 31)]
         for images in invalid:
-            with self.subTest(shape=None if images is None else tuple(images.shape)):
-                with self.assertRaisesRegex(ValueError, "Expected floating-point"):
+            with self.subTest(shape=tuple(images.shape)):
+                with self.assertRaisesRegex(ValueError, "Expected"):
                     model(images)
 
+    def test_three_context_channels_change_only_the_stem(self):
+        single, context = ConvNeXtTiny(1), ConvNeXtTiny(3)
+        self.assertEqual(count_parameters(context) - count_parameters(single), 2 * 96 * 4 * 4)
+        with torch.inference_mode():
+            self.assertEqual(tuple(context.eval()(torch.zeros(2, 3, 240, 256)).shape), (2,))
+            self.assertEqual(tuple(SmallCNN(3).eval()(torch.zeros(2, 3, 64, 64)).shape), (2,))
+
     def test_factories_keep_baseline_initialization_and_use_independent_models(self):
-        self.assertEqual(MODEL_NAMES[:3], ("small_cnn_v1", "convnext_tiny_v1", "convnext_lite_v1"))
-        self.assertEqual(MODEL_NAMES[3:], ("convnext_lite_overlap_v1", "convnext_lite_stride2_v1",
-                                         "convnext_lite_nodrop_v1"))
-        self.assertEqual(MODEL_CHOICES, {
-            "small_cnn": "small_cnn_v1", "cnn": "small_cnn_v1",
-            "convnext_tiny": "convnext_tiny_v1", "convnext": "convnext_tiny_v1",
-            "convnext_lite": "convnext_lite_v1",
-        })
-        self.assertEqual(set(MODEL_CHOICES.values()), set(MODEL_NAMES[:3]))
+        self.assertEqual(MODEL_NAMES, ("small_cnn_v1", "convnext_lite_v1", "convnext_tiny_v1"))
+        self.assertEqual(MODEL_CHOICES, {"cnn": "small_cnn_v1", "convnext_lite": "convnext_lite_v1",
+                                         "convnext_tiny": "convnext_tiny_v1"})
         torch.manual_seed(3710)
         old_baseline = SmallCNN()
         torch.manual_seed(3710)

@@ -1,23 +1,21 @@
-"""The small grayscale CNN used for the AD/NC baseline."""
+"""The small CNN baseline for AD/NC classification."""
 
 import torch
 from torch import nn
 
 
 class SmallCNN(nn.Module):
-    """Map one grayscale slice to an uncalibrated AD logit.
+    """Four Conv-GroupNorm-ReLU-MaxPool blocks, global average pooling and one AD logit.
 
-    Group normalization has no running population statistics. Evaluation still
-    explicitly switches to eval mode to disable dropout. Global spatial means
-    support different image sizes without learning from validation images.
+    GroupNorm keeps no running statistics, so evaluation never depends on batch
+    composition. Global pooling accepts any input size of at least 16 pixels.
     """
 
-    def __init__(self, input_channels: int = 1, output_classes: int = 1) -> None:
-        """Allow controlled grayscale repetition and binary CE without changing defaults."""
+    def __init__(self, input_channels: int = 1) -> None:
         super().__init__()
-        if input_channels not in (1, 3) or output_classes not in (1, 2):
-            raise ValueError("Input channels must be 1/3 and outputs 1/2.")
-        self.input_channels, self.output_classes = input_channels, output_classes
+        if input_channels not in (1, 3):
+            raise ValueError("input_channels must be 1 or 3.")
+        self.input_channels = input_channels
         layers = []
         in_channels = input_channels
         for out_channels in (16, 32, 64, 128):
@@ -29,12 +27,11 @@ class SmallCNN(nn.Module):
             ])
             in_channels = out_channels
         self.features = nn.Sequential(*layers)
-        self.classifier = nn.Sequential(nn.Dropout(0.2), nn.Linear(128, self.output_classes))
+        self.classifier = nn.Sequential(nn.Dropout(0.2), nn.Linear(128, 1))
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """Return raw BCE or two-class CE logits for the configured head."""
+        """Map [batch, channels, height, width] images to [batch] AD logits."""
         if images.ndim != 4 or images.shape[1] != self.input_channels or min(images.shape[-2:]) < 16:
-            raise ValueError(f"Expected [batch, {self.input_channels}, height, width] with height/width >= 16.")
+            raise ValueError(f"Expected [batch, {self.input_channels}, height, width] with sides >= 16.")
         features = self.features(images).mean(dim=(2, 3))
-        logits = self.classifier(features)
-        return logits.squeeze(1) if self.output_classes == 1 else logits
+        return self.classifier(features).squeeze(1)

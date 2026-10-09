@@ -1,67 +1,40 @@
-"""Resolve CLI model aliases and construct fresh versioned architectures."""
+"""Map command-line model names to freshly initialized architectures."""
 
 from torch import nn
 
 from .cnn import SmallCNN
-from .convnext import (ConvNeXtLite, ConvNeXtTiny, ConvNeXtLiteOverlap,
-                       ConvNeXtLiteStride2, ConvNeXtLiteNoDrop)
+from .convnext import ConvNeXtLite, ConvNeXtTiny
 
 
-MODEL_NAMES = ("small_cnn_v1", "convnext_tiny_v1", "convnext_lite_v1",
-               "convnext_lite_overlap_v1", "convnext_lite_stride2_v1", "convnext_lite_nodrop_v1")
+# CLI alias -> versioned architecture name stored in checkpoints.
 MODEL_CHOICES = {
-    "small_cnn": "small_cnn_v1",
     "cnn": "small_cnn_v1",
-    "convnext_tiny": "convnext_tiny_v1",
-    "convnext": "convnext_tiny_v1",
     "convnext_lite": "convnext_lite_v1",
+    "convnext_tiny": "convnext_tiny_v1",
 }
+MODEL_NAMES = tuple(MODEL_CHOICES.values())
 
 
-def model_minimum_size(name):
-    """Return the minimum supported height and width for a versioned model name."""
-    if name == "small_cnn_v1":
-        return 16
-    if name in MODEL_NAMES[1:]:
-        return 32
-    raise ValueError(f"Unsupported model name: {name}")
+def model_minimum_size(name: str) -> int:
+    """Smallest supported image side: four 2x poolings (CNN) or stride 32 (ConvNeXt)."""
+    if name not in MODEL_NAMES:
+        raise ValueError(f"Unsupported model name: {name}")
+    return 16 if name == "small_cnn_v1" else 32
 
 
-def create_model(name: str, *, input_channels: int = 1, output_classes: int = 1,
-                 drop_path: float | None = None) -> nn.Module:
-    """Construct a fresh model; training folds must never reuse another fold's weights."""
+def create_model(name: str, *, input_channels: int = 1, drop_path: float | None = None) -> nn.Module:
+    """Build a randomly initialized model; no pretrained weights are ever loaded."""
     if name == "small_cnn_v1":
         if drop_path is not None:
             raise ValueError("DropPath applies to ConvNeXt only.")
-        return SmallCNN(input_channels, output_classes)
+        return SmallCNN(input_channels)
     if name == "convnext_tiny_v1":
-        return ConvNeXtTiny(input_channels, output_classes, drop_path)
+        return ConvNeXtTiny(input_channels, 0.1 if drop_path is None else drop_path)
     if name == "convnext_lite_v1":
-        return ConvNeXtLite(input_channels, output_classes, drop_path)
-    variants = {"convnext_lite_overlap_v1": ConvNeXtLiteOverlap,
-                "convnext_lite_stride2_v1": ConvNeXtLiteStride2,
-                "convnext_lite_nodrop_v1": ConvNeXtLiteNoDrop}
-    if name in variants:
-        return variants[name](input_channels, output_classes, drop_path)
+        return ConvNeXtLite(input_channels, 0.1 if drop_path is None else drop_path)
     raise ValueError(f"Unsupported model name: {name}")
 
 
-def count_parameters(model):
-    """Count trainable scalar parameters for resource reporting."""
+def count_parameters(model: nn.Module) -> int:
+    """Count trainable parameters for the resource table."""
     return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-
-
-def validate_feature_architecture(config: dict) -> None:
-    """Require complete geometry metadata for the new versioned architecture names."""
-    variants = {"convnext_lite_overlap_v1": ConvNeXtLiteOverlap,
-                "convnext_lite_stride2_v1": ConvNeXtLiteStride2,
-                "convnext_lite_nodrop_v1": ConvNeXtLiteNoDrop}
-    cls = variants.get(config["model_name"])
-    if cls is None:
-        return
-    expected = {"depths": list(cls.depths), "channels": list(cls.channels),
-                "stem": {"kernel": cls.stem_kernel, "stride": cls.stem_stride, "padding": cls.stem_padding},
-                "max_drop_path": cls.max_drop_path,
-                "stage_effective_strides": [cls.stem_stride * 2**i for i in range(4)]}
-    if config.get("model_architecture") != expected:
-        raise ValueError("New checkpoint architecture metadata differs from its versioned model.")
