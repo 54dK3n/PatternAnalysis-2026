@@ -1,8 +1,8 @@
-"""Course-facing PyTorch model interface backed by the existing models package.
+"""Course-facing model interface (PyTorch only, no NumPy).
 
-Component classes are implemented locally in models/cnn.py and
-models/convnext.py; see their cited architectural sources. No weights are
-downloaded. Legacy CNN/Tiny checkpoint names retain their original meaning.
+The components are implemented in ``models/cnn.py`` (baseline) and
+``models/convnext.py`` (ConvNeXt, Liu et al., CVPR 2022). All models are
+randomly initialized; no pretrained weights are downloaded or loaded.
 """
 
 from models import (
