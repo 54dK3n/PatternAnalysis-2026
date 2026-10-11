@@ -24,19 +24,18 @@ class EntrypointTests(unittest.TestCase):
     def test_training_help_exposes_models_and_augmentation_settings(self):
         help_text = self.run_python("train.py", "--help")
         self.assertIn("--model", help_text)
-        for name in ("cnn", "small_cnn", "convnext", "convnext_tiny"):
+        for name in ("cnn", "convnext_lite", "convnext_tiny"):
             self.assertRegex(help_text, rf"(?<![\w]){name}(?![\w])")
-        self.assertIn("--augmentation", help_text)
-        for name in ("none", "light"):
+        for option in ("--augmentation", "--context-slices", "--ema-decay", "--epochs"):
+            self.assertIn(option, help_text)
+        for name in ("none", "light", "strong"):
             self.assertRegex(help_text, rf"(?<![\w]){name}(?![\w])")
-        self.assertIn("--rotation-degrees", help_text)
-        self.assertIn("--translation-fraction", help_text)
 
     def test_prediction_help_keeps_preprocessing_checkpoint_controlled(self):
         help_text = self.run_python("predict.py", "--help")
-        for option in ("--checkpoint", "--data-root", "--splits-dir", "--output"):
+        for option in ("--checkpoint", "--data-root", "--splits-dir", "--output", "--role", "--calibration-file"):
             self.assertIn(option, help_text)
-        for option in ("--model", "--augmentation", "--rotation-degrees", "--translation-fraction"):
+        for option in ("--model", "--augmentation", "--context-slices"):
             self.assertNotIn(option, help_text)
 
     def test_audit_entrypoint_does_not_require_training_dependencies(self):

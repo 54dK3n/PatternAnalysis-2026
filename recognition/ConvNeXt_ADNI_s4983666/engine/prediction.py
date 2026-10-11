@@ -1,136 +1,186 @@
-"""Reload a model checkpoint and reproduce its held-out development predictions.
+"""Load a trained checkpoint and run inference on one patient role.
 
-This version intentionally has no calibration/final-test scoring
-mode. Those phases require a separately implemented and frozen final pipeline.
+Final evaluation is two separate steps on patients never used for training or
+model comparison:
+
+1. ``--role calibration`` fits Platt scaling and the referral threshold on the
+   calibration patients and writes ``calibration.json``.
+2. ``--role test --calibration-file .../calibration.json`` applies both,
+   unchanged, to the test patients. Run this once, for the final model only.
+
+``--role val`` reproduces the development result of a training run.
 """
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import sys
 
 import torch
 
-from utils.training_controls import checkpoint_controls, attach_controls, validate_device
-from models.registry import validate_feature_architecture
-
-from dataset.augmentation import AugmentationConfig
+from dataset import load_fold, load_holdout, make_loader
 from dataset.preprocessing import checkpoint_preprocessing
-from utils.preprocessing_artifacts import export_preprocessing_audit
-from dataset import make_loader, load_fold
-from evaluation.inference import evaluate
-from evaluation.reporting import prediction_report
+from evaluation.calibration import (apply_platt, choose_referral_threshold, fit_platt,
+                                    referral_decision)
+from evaluation.inference import predict_slices, score_slices
+from evaluation.metrics import binary_metrics
+from evaluation.reporting import aggregate_patients, prediction_report
 from evaluation.resources import profile_inference
-from utils.evaluation_artifacts import export_evaluation_artifacts
-from modules import MODEL_NAMES, create_model, model_minimum_size
+from modules import MODEL_NAMES, create_model
 from utils.artifacts import validate_output, write_csv, write_json
+from utils.evaluation_artifacts import export_evaluation_artifacts, plot_patient_examples
 from utils.runtime import seed_everything, select_device
+from utils.training_controls import ExecutionControls, validate_device
+
+# Format 5 (early-stop-selected best.pt) and 6 (final-epoch final.pt) store the same model state.
+CHECKPOINT_FORMATS = (5, 6)
 
 
-def run(args):
-    """Require the checkpoint's original frozen manifests before any prediction."""
-    if args.batch_size < 1 or args.workers < 0 or args.threads < 1:
-        raise ValueError("Batch size and threads must be positive; workers cannot be negative.")
-    output = validate_output(args.output, args.data_root, args.splits_dir)
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+def load_checkpoint(path: Path, device: torch.device) -> tuple[torch.nn.Module, dict, ExecutionControls, int]:
+    """Rebuild the saved architecture and weights; refuse anything not trained from scratch."""
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     config = checkpoint["config"]
-    if config["checkpoint_format_version"] not in (1, 2, 3, 4) or config["model_name"] not in MODEL_NAMES:
-        raise ValueError("Unsupported checkpoint format or model architecture.")
-    if config["aggregation"] != "mean_slice_AD_probability" or config["threshold"] != 0.5:
-        raise ValueError("Unsupported aggregation or decision rule.")
-    controls = checkpoint_controls(config)
-    preprocessing = checkpoint_preprocessing(config)
-    if config["calibration"] != "not_fitted":
-        raise ValueError("Unsupported checkpoint calibration.")
-    if config["checkpoint_format_version"] == 1:
-        if config["augmentation"] != "none":
-            raise ValueError("Legacy checkpoints support only unaugmented training.")
+    if config.get("checkpoint_format_version") not in CHECKPOINT_FORMATS:
+        raise ValueError("Checkpoint was written by an older version of train.py; retrain it.")
+    if config["model_name"] not in MODEL_NAMES or config.get("pretrained_weights") is not None:
+        raise ValueError("Unsupported architecture or non-scratch checkpoint.")
+    controls = ExecutionControls.from_dict(config["execution_controls"])
+    validate_device(controls, device)
+    model = create_model(config["model_name"], input_channels=controls.context_slices,
+                         drop_path=controls.drop_path).to(device)
+    model.load_state_dict(checkpoint["model_state"])
+    return model.eval(), config, controls, checkpoint["epoch"]
+
+
+def load_role_rows(args: argparse.Namespace, config: dict) -> tuple[list[dict], str]:
+    """Rows of the requested role from the same frozen manifests used in training."""
+    if args.role in ("calibration", "test"):
+        data = load_holdout(args.data_root, args.splits_dir, args.role)
     else:
-        augmentation = AugmentationConfig.from_dict(config["augmentation_config"])
-        if augmentation.name != config["augmentation"]:
-            raise ValueError("Checkpoint augmentation name and configuration disagree.")
-    validate_feature_architecture(config)
-    image_size = config["image_size"]
-    minimum_size = model_minimum_size(config["model_name"])
-    if (not isinstance(image_size, (list, tuple)) or len(image_size) != 2
-            or any(type(value) is not int or value < minimum_size for value in image_size)):
-        raise ValueError(f"Checkpoint image height and width must be integers of at least {minimum_size}.")
-    data = load_fold(args.data_root, args.splits_dir, int(config["fold"]))
+        data = load_fold(args.data_root, args.splits_dir, int(config["fold"]))
     if data["manifest_sha256"] != config["manifest_sha256"]:
-        raise ValueError("Checkpoint belongs to a different set of frozen manifests.")
-    if int(data["report"]["config"]["expected_slices"]) != config["expected_slices"]:
-        raise ValueError("Checkpoint slice count differs from the audited split.")
-    if config.get("initialization", "random") != "random" or config.get("pretrained_weights") is not None:
-        raise ValueError("This coursework requires scratch-trained checkpoints.")
-    role = getattr(args, "role", None) or (
-        "early_stop" if config.get("evaluation_mode") == "inner_only" else "val")
-    if role not in ("early_stop", "val"):
-        raise ValueError("Prediction supports development early_stop or val only.")
-    bins = config.get("calibration_bins", 15)
-    reject_threshold = config.get("reject_threshold", 0.8)
+        raise ValueError("Checkpoint was trained with a different set of frozen manifests.")
+    return data[args.role], data["manifest_sha256"]
+
+
+def run(args: argparse.Namespace) -> dict:
+    """Predict one role; fit calibration on ``calibration`` or apply it elsewhere."""
+    if args.role == "test" and args.calibration_file is None:
+        raise ValueError("Test evaluation requires --calibration-file from the calibration step.")
+    if args.role == "calibration" and args.calibration_file is not None:
+        raise ValueError("The calibration step fits a new calibration; do not pass --calibration-file.")
+    if not 0.5 < args.target_accuracy <= 1:
+        raise ValueError("--target-accuracy must be in (0.5, 1].")
+    output = validate_output(args.output, args.data_root, args.splits_dir)
+    device = select_device(args.device)
+    checkpoint_sha256 = hashlib.sha256(args.checkpoint.read_bytes()).hexdigest()
+    model, config, controls, epoch = load_checkpoint(args.checkpoint, device)
     seed_everything(config["seed"])
     torch.set_num_threads(args.threads)
-    device = select_device(args.device)
-    validate_device(controls, device)
-    # Architecture dispatch is recorded in the checkpoint, never inferred from its filename.
-    model = create_model(config["model_name"], input_channels=controls.input_channels,
-                         output_classes=controls.output_classes, drop_path=controls.drop_path).to(device)
-    attach_controls(model, controls)
-    model.load_state_dict(checkpoint["model_state"])
-    loader = make_loader(data[role], args.data_root, tuple(image_size),
-                         args.batch_size, args.workers, config["seed"], False, device, role=role, preprocessing=preprocessing)
-    scores, slices, scans = evaluate(model, loader, device, config["expected_slices"])
-    report, patients = prediction_report(slices, scans, bins, reject_threshold,
-                                         patient_aggregation=controls.patient_aggregation)
+
+    calibration = None
+    if args.calibration_file is not None:
+        calibration = json.loads(args.calibration_file.read_text())
+        if calibration["checkpoint_sha256"] != checkpoint_sha256:
+            raise ValueError("calibration.json was fitted for a different checkpoint.")
+
+    preprocessing = checkpoint_preprocessing(config)  # Validate before reading any patient data.
+    rows, manifest_sha256 = load_role_rows(args, config)
+    image_size = tuple(config["image_size"])
+    loader = make_loader(rows, args.data_root, image_size, args.batch_size, args.workers, config["seed"],
+                         False, device, role=args.role, preprocessing=preprocessing,
+                         context_slices=controls.context_slices)
+    raw_slices, forward_seconds = predict_slices(model, loader, device, controls)
+
+    if args.role == "calibration":
+        slope, intercept = fit_platt([r["logit"] for r in raw_slices], [r["label"] for r in raw_slices])
+        slices = apply_platt(raw_slices, slope, intercept)
+        fitted_patients = aggregate_patients(slices)
+        referral = choose_referral_threshold([p["label"] for p in fitted_patients],
+                                             [p["probability"] for p in fitted_patients], args.target_accuracy)
+        calibration = {"checkpoint_sha256": checkpoint_sha256, "fitted_on": "calibration",
+                       "platt_slope": slope, "platt_intercept": intercept, "referral_unit": "patient", **referral}
+    else:
+        slope, intercept = (calibration["platt_slope"], calibration["platt_intercept"]) if calibration else (1.0, 0.0)
+        slices = apply_platt(raw_slices, slope, intercept)
+
+    threshold = calibration["threshold"] if calibration else None
+    scores, scans = score_slices(slices, config["expected_slices"])
+    raw_scores, _ = score_slices(raw_slices, config["expected_slices"])
+    raw_patients = aggregate_patients(raw_slices)
+    raw_scores["patient"] = binary_metrics([p["label"] for p in raw_patients], [p["probability"] for p in raw_patients])
+    report, patients = prediction_report(slices, scans, reject_threshold=threshold)
     scores["patient"] = report["patient_metrics"]
-    resources = profile_inference(
-        model, tuple(image_size), device, enabled=not getattr(args, "skip_inference_profile", False),
-        on_cpu=getattr(args, "profile_on_cpu", False),
-        warmup=getattr(args, "profile_warmup", 10), repeats=getattr(args, "profile_repeats", 100))
+    for patient in patients:
+        patient["decision"] = referral_decision(patient["probability"], threshold) if calibration else (
+            "AD" if patient["prediction"] else "NC")
+
     output.mkdir(parents=True, exist_ok=False)
-    preprocessing_audit = export_preprocessing_audit(output, loader.dataset, "prediction")
-    failures = export_evaluation_artifacts(
-        output, report, slices, patients, data[role], args.data_root, tuple(image_size), "prediction",
-        preprocessing=preprocessing, scan_parameters=loader.dataset.scan_parameters)
+    if args.role == "calibration":
+        write_json(output / "calibration.json", calibration)
     write_csv(output / "slice_predictions.csv", slices)
     write_csv(output / "scan_predictions.csv", scans)
-    write_json(output / "metrics.json", {
-        "status": "complete", "metrics_format_version": 3,
-        "evaluation_role": "development_inner_early_stop" if role == "early_stop" else "development_outer_validation",
-        "evaluation_reuses_checkpoint_selection_patients": role == "early_stop",
-        "coursework_report": report, "inference_profile": resources, "failure_examples": failures,
-        "model_name": config["model_name"], "execution_controls": controls.to_dict(),
-        "training_recipe": config.get('training_recipe', 'custom'),
-        "fold": config["fold"], "checkpoint_epoch": checkpoint["epoch"],
-        "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
-        "manifest_sha256": data["manifest_sha256"], "calibration": "not_fitted",
-        "metrics": scores,
-        "preprocessing_config": preprocessing.to_dict() if preprocessing.name != "none" else None,
-        "preprocessing_audit": preprocessing_audit,
-    })
-    print(f"Development {role} (primary slice): accuracy={scores['slice']['accuracy']:.4f}, "
-          f"macro_F1={scores['slice']['macro_f1']:.4f}, AUROC={scores['slice']['auroc']}")
-    print(f"Predictions: {output / 'scan_predictions.csv'}")
+    failures = export_evaluation_artifacts(output, report, slices, patients, rows, args.data_root, image_size,
+                                           args.role, preprocessing=preprocessing,
+                                           scan_parameters=loader.dataset.scan_parameters)
+    plot_patient_examples(output / f"{args.role}_examples.png", patients, rows, args.data_root, image_size,
+                          preprocessing=preprocessing, scan_parameters=loader.dataset.scan_parameters)
+    profile = profile_inference(model, image_size, device, controls, enabled=not args.skip_inference_profile)
+    result = {
+        "status": "complete", "role": args.role, "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_epoch": epoch,
+        "manifest_sha256": manifest_sha256, "model_name": config["model_name"],
+        "calibration": calibration, "metrics": scores, "uncalibrated_metrics": raw_scores,
+        "coursework_report": report, "failure_examples": failures, "inference_profile": profile,
+        "forward_ms_per_slice": forward_seconds * 1000 / len(slices),
+    }
+    write_json(output / "metrics.json", result)
+    print_summary(args.role, patients, scores, calibration)
+    print(f"Results: {output / 'metrics.json'}")
+    return result
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def print_summary(role: str, patients: list[dict], scores: dict, calibration: dict | None) -> None:
+    """Print one line per patient, then accuracy at every evaluation unit."""
+    print(f"{'patient':<14}{'true':<6}{'p(AD)':>8}  decision")
+    for patient in patients:
+        truth = "AD" if patient["label"] else "NC"
+        print(f"{patient['patient_id']:<14}{truth:<6}{patient['probability']:>8.3f}  {patient['decision']}")
+    if calibration:
+        print(f"Platt slope {calibration['platt_slope']:.3f}, intercept {calibration['platt_intercept']:.3f}; "
+              f"referral threshold {calibration['threshold']} "
+              f"(fitted on calibration patients, target accuracy {calibration['target_accuracy']}).")
+        referred = sum(p["decision"] == "REFER" for p in patients)
+        print(f"Referred to a specialist: {referred}/{len(patients)} patients.")
+    for unit in ("slice", "scan", "patient"):
+        print(f"{role} {unit}: accuracy={scores[unit]['accuracy']:.4f} AUROC={scores[unit]['auroc']} "
+              f"(n={scores[unit]['n_samples']})")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument("--data-root", type=Path, default=Path("/home/groups/comp3710/ADNI"))
     parser.add_argument("--splits-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--role", choices=("early_stop", "val"), default=None,
-                        help="Default follows checkpoint mode; neither role is final test.")
-    parser.add_argument("--skip-inference-profile", action="store_true")
-    parser.add_argument("--profile-on-cpu", action="store_true")
-    parser.add_argument("--profile-warmup", type=int, default=10)
-    parser.add_argument("--profile-repeats", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--role", choices=("val", "calibration", "test"), required=True)
+    parser.add_argument("--calibration-file", type=Path, default=None,
+                        help="calibration.json from the calibration step (required for --role test).")
+    parser.add_argument("--target-accuracy", type=float, default=0.9,
+                        help="Calibration step only: accuracy required on automated (non-referred) patients.")
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--skip-inference-profile", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
-        run(parser.parse_args(argv))
+        run(args)
     except (ValueError, OSError, RuntimeError, KeyError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
