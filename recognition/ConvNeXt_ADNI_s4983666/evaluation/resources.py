@@ -7,7 +7,7 @@ import time
 import torch
 
 from utils.runtime import sync_device
-from utils.training_controls import autocast_context, model_controls
+from utils.training_controls import ExecutionControls, autocast_context
 
 
 def cuda_peak_mib(device: torch.device) -> float | None:
@@ -17,7 +17,7 @@ def cuda_peak_mib(device: torch.device) -> float | None:
 
 @torch.inference_mode()
 def profile_inference(model: torch.nn.Module, image_size: tuple[int, int], device: torch.device,
-                      batch_sizes: tuple[int, ...] = (1, 64), warmup: int = 10,
+                      controls: ExecutionControls, batch_sizes: tuple[int, ...] = (1, 64), warmup: int = 10,
                       repeats: int = 100, enabled: bool = True,
                       on_cpu: bool = False) -> dict:
     """Benchmark synthetic tensors at the real input shape without scoring labels.
@@ -33,7 +33,7 @@ def profile_inference(model: torch.nn.Module, image_size: tuple[int, int], devic
     result = {"status": "measured", "device": str(device), "warmup": warmup,
               "repeats": repeats, "input_shape": [getattr(model, "input_channels", 1), *image_size],
               "publication_protocol_complete": warmup >= 10 and repeats >= 100,
-              "precision": model_controls(model).precision,
+              "precision": controls.precision,
               "timing_scope": "device_resident_forward_only_excludes_loading_and_transfer",
               "batches": []}
     if not enabled or (device.type != "cuda" and not on_cpu):
@@ -50,14 +50,14 @@ def profile_inference(model: torch.nn.Module, image_size: tuple[int, int], devic
                     torch.cuda.reset_peak_memory_stats(device)
                 images = torch.zeros(batch_size, getattr(model, "input_channels", 1), *image_size, device=device)
                 for _ in range(warmup):
-                    with autocast_context(model, device):
+                    with autocast_context(controls, device):
                         model(images)
                 sync_device(device)
                 elapsed = []
                 for _ in range(repeats):
                     sync_device(device)
                     started = time.perf_counter()
-                    with autocast_context(model, device):
+                    with autocast_context(controls, device):
                         logits = model(images)
                     sync_device(device)
                     elapsed.append((time.perf_counter() - started) * 1000)
