@@ -37,6 +37,47 @@ def select_failure_cases(slices: list[dict], limit: int = 5) -> list[dict]:
     return selected[:limit]
 
 
+def plot_patient_examples(path: Path, patients: list[dict], manifest_rows: list[dict], data_root: Path,
+                          image_size: tuple[int, int], *, preprocessing=None, scan_parameters=None,
+                          per_group: int = 4) -> None:
+    """Grid of example patients: the most confident automated decisions, then referred ones.
+
+    Each panel shows the middle slice of the patient's first scan with the
+    true label, the patient-level p(AD) and the decision (AD / NC / REFER).
+    """
+    def confidence(patient):
+        return max(patient["probability"], 1 - patient["probability"])
+
+    automated = sorted((p for p in patients if p.get("decision") != "REFER"), key=confidence, reverse=True)
+    referred = sorted((p for p in patients if p.get("decision") == "REFER"), key=confidence)
+    chosen = automated[:per_group] + referred[:per_group]
+    if not chosen:
+        return
+    middle_rows = []
+    for patient in chosen:
+        rows = [r for r in manifest_rows if r["patient_id"] == patient["patient_id"]]
+        first_scan = min(r["image_id"] for r in rows)
+        scan_rows = sorted((r for r in rows if r["image_id"] == first_scan), key=lambda r: int(r["slice_index"]))
+        middle_rows.append(scan_rows[len(scan_rows) // 2])
+    dataset = ADNISliceDataset(middle_rows, data_root, image_size,
+                               preprocessing=preprocessing, scan_parameters=scan_parameters)
+    os.environ.setdefault("MPLCONFIGDIR", str(Path(path).parent / ".matplotlib"))
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    figure, axes = plt.subplots(1, len(chosen), figsize=(2.8 * len(chosen), 3.6), squeeze=False,
+                                layout="constrained")
+    for index, patient in enumerate(chosen):
+        axis = axes[0, index]
+        axis.imshow(dataset[index]["image"][0], cmap="gray", vmin=-1, vmax=1)
+        truth = "AD" if patient["label"] else "NC"
+        axis.set_title(f"{patient['patient_id']}\ntrue {truth} | p(AD)={patient['probability']:.2f}\n"
+                       f"decision: {patient.get('decision', '-')}", fontsize=8)
+        axis.axis("off")
+    figure.savefig(path, dpi=160)
+    plt.close(figure)
+
+
 def export_evaluation_artifacts(output: Path, report: dict, slices: list[dict],
                                 patients: list[dict], manifest_rows: list[dict],
                                 data_root: Path, image_size: tuple[int, int], prefix: str, *,
@@ -64,12 +105,12 @@ def export_evaluation_artifacts(output: Path, report: dict, slices: list[dict],
     nonempty = [r for r in values["reliability_bins"] if r["count"]]
     axes[0].plot([r["mean_confidence"] for r in nonempty], [r["accuracy"] for r in nonempty], "o-")
     axes[0].plot([0, 1], [0, 1], "--", color="gray")
-    axes[0].set(xlabel="Raw predicted-class confidence", ylabel="Accuracy", title="Slice reliability", xlim=(0, 1), ylim=(0, 1))
+    axes[0].set(xlabel="Predicted-class confidence", ylabel="Accuracy", title="Slice reliability", xlim=(0, 1), ylim=(0, 1))
     for kind in ("correct", "incorrect"):
         histogram = values["confidence_histogram"]
         axes[1].stairs([r[kind] for r in histogram],
                        [i / values["bins"] for i in range(values["bins"] + 1)], label=kind)
-    axes[1].set(xlabel="Raw confidence", ylabel="Slice count", title="Confidence and correctness")
+    axes[1].set(xlabel="Confidence", ylabel="Slice count", title="Confidence and correctness")
     axes[1].legend()
     curve = [r for r in values["risk_coverage"] if r["risk"] is not None]
     axes[2].step([r["coverage"] for r in curve], [r["risk"] for r in curve], where="post")
