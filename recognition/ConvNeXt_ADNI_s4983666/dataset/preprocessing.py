@@ -109,31 +109,19 @@ def add_preprocessing_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def preprocessing_from_args(args: argparse.Namespace) -> PreprocessingConfig:
-    """Keep older Python callers compatible when optional arguments are absent."""
+    """Build the configuration from the parsed command-line options."""
     return PreprocessingConfig(
-        name=getattr(args, "preprocessing", "none"),
-        foreground_threshold=getattr(args, "foreground_threshold", 16),
-        lower_percentile=getattr(args, "intensity_lower_percentile", 1.0),
-        upper_percentile=getattr(args, "intensity_upper_percentile", 99.0),
-        crop_margin=getattr(args, "crop_margin", 8),
-        crop_height=getattr(args, "crop_height", 0), crop_width=getattr(args, "crop_width", 0))
+        name=args.preprocessing, foreground_threshold=args.foreground_threshold,
+        lower_percentile=args.intensity_lower_percentile, upper_percentile=args.intensity_upper_percentile,
+        crop_margin=args.crop_margin, crop_height=args.crop_height, crop_width=args.crop_width)
 
 
 def checkpoint_preprocessing(config: dict[str, Any]) -> PreprocessingConfig:
-    """Decode historical formats or require the new checkpoint's exact pipeline."""
-    version = config["checkpoint_format_version"]
-    if type(version) is not int or version not in (1, 2, 3, 4):
-        raise ValueError("Unsupported checkpoint format.")
-    if version in (1, 2) or (version == 4 and config.get("preprocessing_config") is None):
-        if config["normalization"] != LEGACY_NORMALIZATION or "preprocessing_config" in config:
-            raise ValueError("Unsupported historical checkpoint preprocessing.")
-        return PreprocessingConfig()
-    preprocessing = PreprocessingConfig.from_dict(config.get("preprocessing_config"))
-    if preprocessing.name == "none" or config["normalization"] != SCAN_NORMALIZATION:
-        raise ValueError("New checkpoint preprocessing and normalization disagree.")
-    if preprocessing.crops and (not preprocessing.crop_height
-                               or list(config["image_size"]) != [preprocessing.crop_height, preprocessing.crop_width]):
-        raise ValueError("Checkpoint crop dimensions are unresolved or disagree with its input shape.")
+    """Rebuild the exact preprocessing saved with a checkpoint."""
+    saved = config.get("preprocessing_config")
+    preprocessing = PreprocessingConfig() if saved is None else PreprocessingConfig.from_dict(saved)
+    if preprocessing.crops and list(config["image_size"]) != [preprocessing.crop_height, preprocessing.crop_width]:
+        raise ValueError("Checkpoint crop dimensions disagree with its input shape.")
     return preprocessing
 
 

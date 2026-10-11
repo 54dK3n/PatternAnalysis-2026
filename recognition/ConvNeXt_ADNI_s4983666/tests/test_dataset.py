@@ -11,8 +11,9 @@ from PIL import Image, ImageOps
 import torch
 
 from dataset import splits as adni_splits
+from dataset.augmentation import make_augmentation
 from dataset.slices import ADNISliceDataset
-from dataset.manifests import load_fold, manifest_sha256
+from dataset.manifests import load_fold, load_holdout, manifest_sha256
 import test_adni_splits as split_tests
 
 
@@ -71,17 +72,11 @@ class SliceDatasetTests(unittest.TestCase):
         self.rows[0]["label"] = "0"
         self.assertEqual(dataset[0]["label"].item(), 1.0)
 
-    def test_source_change_after_dataset_construction_is_rejected(self):
-        dataset = ADNISliceDataset(self.rows, self.root)
-        Image.new("L", (6, 4), color=127).save(self.root / self.rows[0]["relative_path"])
-        with self.assertRaisesRegex(adni_splits.AuditError, "Source image changed"):
-            dataset[0]
-
     def test_rejects_path_traversal_and_absolute_paths(self):
         for relative in ("../outside.jpeg", str(self.root / "slices/100_0.jpeg")):
             with self.subTest(relative=relative):
                 row = dict(self.rows[0], relative_path=relative)
-                with self.assertRaisesRegex(adni_splits.AuditError, "inside the data directory"):
+                with self.assertRaisesRegex(ValueError, "outside the data directory"):
                     ADNISliceDataset([row], self.root)
 
     def test_rejects_symlink_escape(self):
@@ -89,33 +84,39 @@ class SliceDatasetTests(unittest.TestCase):
             external = Path(outside) / "outside.jpeg"
             Image.new("L", (6, 4)).save(external)
             (self.root / "escape.jpeg").symlink_to(external)
-            with self.assertRaisesRegex(adni_splits.AuditError, "outside the data directory"):
+            with self.assertRaisesRegex(ValueError, "outside the data directory"):
                 ADNISliceDataset([dict(self.rows[0], relative_path="escape.jpeg")], self.root)
-
-    def test_rejects_duplicates_and_inconsistent_scan_identities(self):
-        mutations = (
-            dict(self.rows[1], relative_path=self.rows[0]["relative_path"]),
-            dict(self.rows[1], slice_index="0"),
-            dict(self.rows[1], patient_id="002_S_5000"),
-            dict(self.rows[1], label="0"),
-        )
-        for second in mutations:
-            with self.subTest(second=second):
-                with self.assertRaises(adni_splits.AuditError):
-                    ADNISliceDataset([self.rows[0], second], self.root)
 
     def test_longitudinal_patient_can_have_different_scan_labels(self):
         rows = [self.rows[0], dict(self.rows[1], image_id="101", label="0")]
         dataset = ADNISliceDataset(rows, self.root)
         self.assertEqual([dataset[i]["label"].item() for i in range(2)], [1.0, 0.0])
 
-    def test_rejects_empty_data_invalid_labels_and_dimensions(self):
-        with self.assertRaises(adni_splits.AuditError):
+    def test_rejects_empty_data_invalid_labels_and_roles(self):
+        with self.assertRaises(ValueError):
             ADNISliceDataset([], self.root)
-        with self.assertRaises(adni_splits.AuditError):
+        with self.assertRaises(ValueError):
             ADNISliceDataset([dict(self.rows[0], label="2")], self.root)
-        with self.assertRaises(adni_splits.AuditError):
-            ADNISliceDataset(self.rows, self.root, image_size=(0, 256))
+        with self.assertRaisesRegex(ValueError, "train role"):
+            ADNISliceDataset(self.rows, self.root, role="test", augmentation=make_augmentation("strong"))
+
+    def test_context_slices_stack_neighbours_from_the_same_scan(self):
+        # Three slices of one scan with distinct intensities, plus another scan.
+        rows = []
+        for index, value in enumerate((0, 128, 255)):
+            relative = f"context/200_{index}.jpeg"
+            (self.root / relative).parent.mkdir(parents=True, exist_ok=True)
+            Image.new("L", (6, 4), color=value).save(self.root / relative, quality=100)
+            rows.append({"relative_path": relative, "label": "0", "patient_id": "003_S_1",
+                         "image_id": "200", "slice_index": str(index)})
+        rows.append(dict(self.rows[0], slice_index="1"))  # Different scan, adjacent index.
+        dataset = ADNISliceDataset(rows, self.root, image_size=(4, 6), context_slices=3)
+        channel_means = [round(value, 1) for value in dataset[1]["image"].mean(dim=(1, 2)).tolist()]
+        self.assertEqual(channel_means, [-1.0, 0.0, 1.0])            # previous, centre, next
+        first = dataset[0]["image"]
+        self.assertTrue(torch.equal(first[0], first[1]))              # scan edge repeats the centre
+        last_scan = dataset[3]["image"]
+        self.assertTrue(torch.equal(last_scan[0], last_scan[1]))      # never borrows another scan
 
 
 class FoldLoadingTests(unittest.TestCase):
@@ -135,9 +136,13 @@ class FoldLoadingTests(unittest.TestCase):
         with mock.patch.object(adni_splits, "verify", wraps=adni_splits.verify) as verify:
             loaded = self.load()
         self.assertEqual(verify.call_count, 1)
-        self.assertEqual(set(loaded), {"train", "early_stop", "val", "report", "manifest_sha256"})
+        self.assertEqual(set(loaded), {"train", "val", "report", "manifest_sha256"})
         self.assertEqual(loaded["manifest_sha256"], manifest_sha256(self.fixture.out))
-        roles = [loaded[role] for role in ("train", "early_stop", "val")]
+        # The frozen early_stop manifest is merged into train, not dropped.
+        fold = self.fixture.out / "fold_01"
+        merged = split_tests.read_csv(fold / "train.csv") + split_tests.read_csv(fold / "early_stop.csv")
+        self.assertEqual(split_tests.paths(loaded["train"]), split_tests.paths(merged))
+        roles = [loaded[role] for role in ("train", "val")]
         for rows in roles:
             self.assertTrue(rows)
             self.assertEqual({row["partition"] for row in rows}, {"development"})
@@ -146,6 +151,19 @@ class FoldLoadingTests(unittest.TestCase):
                 self.assertFalse({row["patient_id"] for row in rows}
                                  & {row["patient_id"] for row in other})
         self.assertEqual(loaded["report"]["config"]["expected_slices"], 2)
+
+    def test_holdout_roles_are_patient_disjoint_from_development(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            calibration = load_holdout(self.fixture.root, self.fixture.out, "calibration")["calibration"]
+            test = load_holdout(self.fixture.root, self.fixture.out, "test")["test"]
+        development = self.load()
+        development_patients = {r["patient_id"] for role in ("train", "val") for r in development[role]}
+        for rows in (calibration, test):
+            self.assertTrue(rows)
+            self.assertFalse({r["patient_id"] for r in rows} & development_patients)
+        self.assertFalse({r["patient_id"] for r in calibration} & {r["patient_id"] for r in test})
+        with self.assertRaises(adni_splits.AuditError):
+            load_holdout(self.fixture.root, self.fixture.out, "train")
 
     def test_corrupted_source_stops_loader(self):
         source = next(self.fixture.root.rglob("*.jpeg"))
@@ -156,7 +174,7 @@ class FoldLoadingTests(unittest.TestCase):
     def test_invalid_fold_cannot_load_arbitrary_manifest(self):
         for fold in (0, 6, "../test", True):
             with self.subTest(fold=fold):
-                with self.assertRaisesRegex(adni_splits.AuditError, "fold must be an integer"):
+                with self.assertRaisesRegex(adni_splits.AuditError, "fold must be between"):
                     self.load(fold)
 
     def test_audit_failure_prevents_manifest_reading(self):

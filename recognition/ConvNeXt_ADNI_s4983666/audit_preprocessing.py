@@ -25,11 +25,11 @@ def run(args: argparse.Namespace) -> dict:
     preprocessing, crop_fit = fit_training_crop(scans, preprocessing, role="train")
     image_size = ((preprocessing.crop_height, preprocessing.crop_width) if preprocessing.crops
                   else (args.image_height, args.image_width))
-    # Check both inner roles before publishing any preview; no held-out shape refitting.
+    # Check train and val before publishing any preview; val reuses the train-fitted crop.
     datasets = {role: ADNISliceDataset(data[role], args.data_root, image_size, role=role,
                                       preprocessing=preprocessing,
                                       scan_parameters=scans if role == "train" else None)
-                for role in ("train", "early_stop")}
+                for role in ("train", "val")}
     output.mkdir(parents=True, exist_ok=False)
     result = {"status": "complete", "kind": "input_preprocessing_audit_no_model_no_accuracy",
               "preprocessing_config": preprocessing.to_dict(), "crop_fit": crop_fit,
