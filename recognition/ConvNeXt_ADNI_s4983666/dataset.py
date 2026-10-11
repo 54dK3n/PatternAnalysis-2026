@@ -1,14 +1,13 @@
-"""Course-facing dataset compatibility interface; implementations stay packaged.
+"""Course-facing data interface: patient-level splits, transforms and loaders.
 
-Python resolves the existing dataset/ package for ordinary imports. This file
-also supplies the named coursework interface without copying split logic or
-changing frozen patient assignments. Direct imports use the same loader,
-manifest verification and transforms as the package.
+The implementation lives in the ``dataset/`` package; see
+``dataset/manifests.py`` for the leakage-free role definitions.
 """
 
 from dataset.augmentation import AugmentationConfig, make_augmentation
 from dataset.loaders import make_loader
-from dataset.manifests import load_fold
+from dataset.manifests import load_fold, load_holdout
 from dataset.slices import ADNISliceDataset
 
-__all__ = ["ADNISliceDataset", "AugmentationConfig", "make_augmentation", "make_loader", "load_fold"]
+__all__ = ["ADNISliceDataset", "AugmentationConfig", "make_augmentation", "make_loader",
+           "load_fold", "load_holdout"]

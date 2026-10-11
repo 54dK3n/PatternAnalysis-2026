@@ -15,7 +15,7 @@ from PIL import Image
 import torch
 
 import audit_preprocessing
-from dataset.preprocessing import (PreprocessingConfig, SCAN_NORMALIZATION, apply_preprocessing,
+from dataset.preprocessing import (PreprocessingConfig, apply_preprocessing,
                                    checkpoint_preprocessing, crop_box, fit_training_crop, prepare_scans)
 from dataset.slices import ADNISliceDataset
 from engine import prediction, training
@@ -125,8 +125,7 @@ class ScanPreprocessingTests(unittest.TestCase):
 
     def test_strict_checkpoint_contract_and_configuration_validation(self) -> None:
         """Malformed/new algorithms fail before loading any evaluation data."""
-        config = {"checkpoint_format_version": 3, "normalization": SCAN_NORMALIZATION,
-                  "image_size": [32, 32], "preprocessing_config": self.config.to_dict()}
+        config = {"image_size": [32, 32], "preprocessing_config": self.config.to_dict()}
         self.assertEqual(checkpoint_preprocessing(config), self.config)
         for field, value in (("algorithm", "changed"), ("foreground_threshold", 255),
                              ("lower_percentile", float("nan")), ("crop_height", True)):
@@ -148,51 +147,48 @@ class PreprocessedTrainingTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.fixture.prepare()
-        self.args = argparse.Namespace(
-            data_root=self.fixture.root, splits_dir=self.fixture.out,
-            output=self.fixture.base / "preprocessed_run", model="cnn", fold=1,
-            epochs=1, patience=5, min_delta=0.0, batch_size=16, workers=0,
-            threads=1, lr=0.001, weight_decay=0.0001, seed=3710,
-            image_height=32, image_width=32, device="cpu", inner_only=True,
-            preprocessing="scan_intensity_crop", crop_margin=2, crop_height=0, crop_width=0,
-            skip_inference_profile=True)
+        self.args = training.build_parser().parse_args([
+            "--data-root", str(self.fixture.root), "--splits-dir", str(self.fixture.out),
+            "--output", str(self.fixture.base / "preprocessed_run"), "--model", "cnn", "--epochs", "1",
+            "--warmup-epochs", "0", "--batch-size", "16", "--workers", "0", "--threads", "1",
+            "--image-height", "32", "--image-width", "32", "--device", "cpu",
+            "--preprocessing", "scan_intensity_crop", "--crop-margin", "2", "--skip-inference-profile"])
 
     def test_train_predict_and_failure_export_use_identical_preprocessing(self) -> None:
-        """Inner-only training never constructs outer/holdout loaders; replay is exact."""
+        """Training only builds train and val loaders (never holdouts); replay is exact."""
         real_loader = training.make_loader
         seen = []
 
         def observed_loader(rows: list[dict], *args: object, **kwargs: object) -> object:
-            """Check deterministic preprocessing is enabled for both inner roles."""
+            """Check deterministic preprocessing is enabled for both development roles."""
             seen.append(kwargs["role"])
-            self.assertIn(kwargs["role"], ("train", "early_stop"))
+            self.assertIn(kwargs["role"], ("train", "val"))
             self.assertEqual(kwargs["preprocessing"].name, "scan_intensity_crop")
             return real_loader(rows, *args, **kwargs)
 
         with mock.patch("engine.training.make_loader", side_effect=observed_loader), contextlib.redirect_stdout(io.StringIO()):
             result = training.run(self.args)
-        self.assertEqual(seen, ["train", "early_stop"])
-        saved = torch.load(self.args.output / "best.pt", map_location="cpu", weights_only=True)
-        self.assertEqual(saved["config"]["checkpoint_format_version"], 3)
+        self.assertEqual(seen, ["train", "val"])
+        saved = torch.load(self.args.output / "final.pt", map_location="cpu", weights_only=True)
+        self.assertEqual(saved["config"]["checkpoint_format_version"], 6)
         self.assertEqual(saved["config"]["preprocessing_crop_fit"]["fit_role"], "train")
         self.assertEqual(saved["config"]["image_size"], [32, 32])
-        self.assertEqual(result["preprocessing_audits"]["early_stop"]["status"], "exported")
-        from engine.diagnosis import _validate_checkpoint
-        self.assertEqual(_validate_checkpoint(saved)["checkpoint_format_version"], 3)
+        self.assertEqual(result["preprocessing_audits"]["val"]["status"], "exported")
         # Failure grids retain all source slices per scan even if only one was wrong.
         import utils.evaluation_artifacts as failure_module
         actual_dataset = failure_module.ADNISliceDataset
-        prediction_args = argparse.Namespace(
-            checkpoint=self.args.output / "best.pt", data_root=self.fixture.root,
-            splits_dir=self.fixture.out, output=self.fixture.base / "prediction",
-            batch_size=16, workers=0, threads=1, device="cpu", skip_inference_profile=True)
+        prediction_args = prediction.build_parser().parse_args([
+            "--checkpoint", str(self.args.output / "final.pt"), "--data-root", str(self.fixture.root),
+            "--splits-dir", str(self.fixture.out), "--output", str(self.fixture.base / "prediction"),
+            "--role", "val", "--batch-size", "16", "--workers", "0", "--threads", "1",
+            "--device", "cpu", "--skip-inference-profile"])
         with mock.patch.object(failure_module, "ADNISliceDataset", wraps=actual_dataset) as exported, \
                 contextlib.redirect_stdout(io.StringIO()):
             prediction.run(prediction_args)
         reproduced = json.loads((prediction_args.output / "metrics.json").read_text())
         for unit in ("slice", "scan", "patient"):
             self.assertEqual(result["metrics"][unit], reproduced["metrics"][unit])
-        self.assertEqual((self.args.output / "early_stop_slice_predictions.csv").read_bytes(),
+        self.assertEqual((self.args.output / "val_slice_predictions.csv").read_bytes(),
                          (prediction_args.output / "slice_predictions.csv").read_bytes())
         if exported.call_args:
             params = exported.call_args.kwargs["scan_parameters"]
@@ -202,19 +198,20 @@ class PreprocessedTrainingTests(unittest.TestCase):
         bad_path = self.fixture.base / "bad.pt"
         torch.save(broken, bad_path)
         prediction_args.checkpoint, prediction_args.output = bad_path, self.fixture.base / "rejected"
-        with mock.patch("engine.prediction.load_fold") as load_fold, self.assertRaises(ValueError):
+        with mock.patch("engine.prediction.load_fold") as load_fold, self.assertRaises(ValueError), \
+                contextlib.redirect_stdout(io.StringIO()):
             prediction.run(prediction_args)
         load_fold.assert_not_called()
         self.assertFalse(prediction_args.output.exists())
 
-    def test_audit_has_no_model_and_only_exports_inner_inputs(self) -> None:
+    def test_audit_has_no_model_and_only_exports_development_inputs(self) -> None:
         """The review entry point freezes dimensions without training or scoring."""
         args = argparse.Namespace(**{**vars(self.args), "output": self.fixture.base / "input_audit", "max_images": 2})
         with contextlib.redirect_stdout(io.StringIO()):
             report = audit_preprocessing.run(args)
-        self.assertEqual(set(report["roles"]), {"train", "early_stop"})
+        self.assertEqual(set(report["roles"]), {"train", "val"})
         self.assertEqual(report["image_size"], [32, 32])
-        self.assertFalse((args.output / "best.pt").exists())
+        self.assertFalse((args.output / "final.pt").exists())
         self.assertFalse((args.output / "metrics.json").exists())
         self.assertTrue((args.output / "train_preprocessing_preview.png").exists())
 
