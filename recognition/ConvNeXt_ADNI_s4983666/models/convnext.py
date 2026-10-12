@@ -3,7 +3,10 @@
 Architecture: Liu et al., "A ConvNet for the 2020s", CVPR 2022,
 https://arxiv.org/abs/2201.03545 . The authors' reference implementation
 (https://github.com/facebookresearch/ConvNeXt/blob/main/models/convnext.py)
-was consulted for the block layout; all weights are randomly initialized here.
+was consulted for the block layout. ``ConvNeXtTiny`` and ``ConvNeXtLite`` are
+randomly initialized; ``ConvNeXtTinyImageNet`` has the same layers plus a fixed
+input normalization so that the authors' ImageNet-1k weights can be loaded
+into it (models/pretrained.py).
 """
 
 import torch
@@ -122,6 +125,42 @@ class ConvNeXtTiny(nn.Module):
             features = stage(downsample(features))
         pooled = self.final_norm(features.mean(dim=(2, 3)))
         return self.classifier(pooled).squeeze(1)
+
+
+class ImageNetInput(nn.Module):
+    """Map inputs in [-1, 1] to the ImageNet mean/std normalization of the pretrained weights.
+
+    The data pipeline stays unchanged; the constants are buffers, so they are
+    saved with the checkpoint and cannot be trained.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return ((images + 1) / 2 - self.mean) / self.std
+
+
+class ConvNeXtTinyImageNet(ConvNeXtTiny):
+    """ConvNeXt-Tiny for three-slice input that starts from ImageNet-1k weights.
+
+    The three context slices take the place of the RGB channels. The weights
+    are loaded by ``models.pretrained.load_imagenet_weights``; the one-logit
+    classifier always starts from random initialization.
+    """
+
+    def __init__(self, input_channels: int = 3, drop_path: float = 0.1) -> None:
+        if input_channels != 3:
+            raise ValueError("ImageNet weights expect three input channels (use --context-slices 3).")
+        super().__init__(input_channels, drop_path)
+        self.input_normalization = ImageNetInput()
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        if images.ndim != 4 or images.shape[1] != 3:
+            raise ValueError("Expected [batch, 3, height, width] images.")
+        return super().forward(self.input_normalization(images))
 
 
 class ConvNeXtLite(ConvNeXtTiny):

@@ -19,6 +19,7 @@ failed case).
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -37,7 +38,8 @@ def case_command(case: dict, common: dict, output: Path, base_args: list[str], s
         if value is True:
             command.append(flag)
         elif value is not False and value is not None:
-            command.extend([flag, str(value)])
+            # String values may use ~ or $VARS (e.g. the location of downloaded pretrained weights).
+            command.extend([flag, os.path.expandvars(os.path.expanduser(value)) if isinstance(value, str) else str(value)])
     return command
 
 

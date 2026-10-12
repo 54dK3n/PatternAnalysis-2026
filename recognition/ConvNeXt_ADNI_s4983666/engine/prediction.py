@@ -27,7 +27,7 @@ from evaluation.inference import predict_slices, score_slices
 from evaluation.metrics import binary_metrics
 from evaluation.reporting import aggregate_patients, prediction_report
 from evaluation.resources import profile_inference
-from modules import MODEL_NAMES, create_model
+from modules import MODEL_NAMES, PRETRAINED_MODELS, create_model
 from utils.artifacts import validate_output, write_csv, write_json
 from utils.evaluation_artifacts import export_evaluation_artifacts, plot_patient_examples
 from utils.runtime import seed_everything, select_device
@@ -38,13 +38,14 @@ CHECKPOINT_FORMATS = (5, 6)
 
 
 def load_checkpoint(path: Path, device: torch.device) -> tuple[torch.nn.Module, dict, ExecutionControls, int]:
-    """Rebuild the saved architecture and weights; refuse anything not trained from scratch."""
+    """Rebuild the saved architecture and weights; only the cited ImageNet ConvNeXt may be pretrained."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     config = checkpoint["config"]
     if config.get("checkpoint_format_version") not in CHECKPOINT_FORMATS:
         raise ValueError("Checkpoint was written by an older version of train.py; retrain it.")
-    if config["model_name"] not in MODEL_NAMES or config.get("pretrained_weights") is not None:
-        raise ValueError("Unsupported architecture or non-scratch checkpoint.")
+    pretrained = config.get("pretrained_weights")
+    if config["model_name"] not in MODEL_NAMES or (pretrained is not None) != (config["model_name"] in PRETRAINED_MODELS):
+        raise ValueError("Unsupported architecture or undeclared pretrained weights.")
     controls = ExecutionControls.from_dict(config["execution_controls"])
     validate_device(controls, device)
     model = create_model(config["model_name"], input_channels=controls.context_slices,
