@@ -6,6 +6,10 @@ predictions. Runs are grouped by case id with the ``_seed<N>`` and
 ``_fold<N>`` suffixes removed, so seeds or folds of one configuration are
 averaged (mean and sample standard deviation).
 
+With ``--data-root`` the scan AUROC and balanced accuracy are also computed on
+the validation scans acquired in the period shared by both classes (2017 on,
+see docs/ACQUISITION_CONFOUND.md) from each run's ``val_scan_predictions.csv``.
+
 With ``--baseline`` and ``--candidate`` (two group names), runs of the two
 groups that share the same fold and seed are paired and the per-pair
 candidate - baseline differences are reported, which is the fair comparison
@@ -23,11 +27,26 @@ import re
 import statistics
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from dataset.acquisition import SHARED_PERIOD_START, acquisition_info  # noqa: E402
+from evaluation.metrics import binary_metrics  # noqa: E402
+
 UNITS = ("slice", "scan", "patient")
 SUFFIX = re.compile(r"_(seed|fold)\d+")
 
 
-def read_run(run: Path) -> dict:
+def shared_period_scores(run: Path, info: dict) -> dict:
+    """Scan AUROC / balanced accuracy on validation scans acquired in the shared period."""
+    with (run / "val_scan_predictions.csv").open(newline="") as handle:
+        scans = [row for row in csv.DictReader(handle)
+                 if info[row["image_id"]]["year"] >= SHARED_PERIOD_START]
+    scores = binary_metrics([int(row["label"]) for row in scans], [float(row["probability"]) for row in scans])
+    return {"shared_period_scans": len(scans), "shared_period_ad_scans": sum(row["label"] == "1" for row in scans),
+            "shared_period_scan_auroc": scores["auroc"],
+            "shared_period_scan_balanced_accuracy": scores["balanced_accuracy"]}
+
+
+def read_run(run: Path, info: dict | None = None) -> dict:
     """One row of the per-run table."""
     metrics = json.loads((run / "metrics.json").read_text())
     config = json.loads((run / "config.json").read_text())
@@ -55,6 +74,8 @@ def read_run(run: Path) -> dict:
         "seconds_per_epoch": resources["training_seconds"] / metrics["epochs_completed"],
         "replay_match": json.loads(replay.read_text())["match"] if replay.exists() else None,
     })
+    if info is not None:
+        row.update(shared_period_scores(run, info))
     return row
 
 
@@ -102,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="Prefix for <output>.csv and <output>.md.")
     parser.add_argument("--baseline", help="Group name of the baseline (e.g. CV_cnn_context).")
     parser.add_argument("--candidate", help="Group name compared against the baseline.")
+    parser.add_argument("--data-root", type=Path,
+                        help="ADNI root with meta_data_with_label.json; adds shared-period scan metrics.")
     args = parser.parse_args(argv)
     if bool(args.baseline) != bool(args.candidate):
         parser.error("--baseline and --candidate go together.")
@@ -109,7 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     runs = sorted(run for plan in args.plan_dirs for run in plan.iterdir() if (run / "metrics.json").exists())
     if not runs:
         parser.error("No completed runs (metrics.json) found.")
-    rows = [read_run(run) for run in runs]
+    info = acquisition_info(args.data_root) if args.data_root else None
+    rows = [read_run(run, info) for run in runs]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.with_suffix(".csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
@@ -126,6 +150,15 @@ def main(argv: list[str] | None = None) -> int:
                      + f" | {row['patient_fp']} / {row['patient_fn']} | {row['final_train_slice_accuracy']:.3f}"
                      + f" | {row['replay_match']} |")
     lines += ["", "## Per group (mean ± sd over seeds / folds)", "", *group_table(rows)]
+    if info is not None:
+        lines += ["", f"## Scans acquired {SHARED_PERIOD_START} on (both classes present)", "",
+                  "| Group | Runs | Scans (AD) per run | Scan AUROC | Scan balanced acc. |", "|---|---:|---|---:|---:|"]
+        for group in dict.fromkeys(row["group"] for row in rows):
+            members = [row for row in rows if row["group"] == group]
+            sizes = ", ".join(f"{r['shared_period_scans']} ({r['shared_period_ad_scans']})" for r in members)
+            lines.append(f"| {group} | {len(members)} | {sizes} | "
+                         f"{mean_std([r['shared_period_scan_auroc'] for r in members])} | "
+                         f"{mean_std([r['shared_period_scan_balanced_accuracy'] for r in members])} |")
     if args.baseline:
         lines += ["", "## Candidate vs baseline", "", *paired_table(rows, args.baseline, args.candidate)]
     args.output.with_suffix(".md").write_text("\n".join(lines) + "\n")
