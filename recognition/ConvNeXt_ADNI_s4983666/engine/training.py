@@ -34,7 +34,8 @@ from evaluation.inference import evaluate
 from evaluation.metrics import binary_metrics
 from evaluation.reporting import prediction_report
 from evaluation.resources import cuda_peak_mib, profile_inference
-from modules import MODEL_CHOICES, count_parameters, create_model, model_minimum_size
+from models.pretrained import load_imagenet_weights
+from modules import MODEL_CHOICES, PRETRAINED_MODELS, count_parameters, create_model, model_minimum_size
 from utils.artifacts import code_fingerprints, plot_history, validate_output, write_csv, write_json
 from utils.evaluation_artifacts import export_evaluation_artifacts
 from utils.preprocessing_artifacts import export_preprocessing_audit
@@ -81,13 +82,13 @@ def train_epoch(model: nn.Module, loader, optimizer: torch.optim.Optimizer, crit
 
 def build_config(args: argparse.Namespace, model_name: str, model: nn.Module, controls: ExecutionControls,
                  augmentation, preprocessing, image_size, data: dict, pos_weight: float,
-                 sampling_config: dict, crop_fit: dict, device: torch.device) -> dict:
+                 sampling_config: dict, crop_fit: dict, device: torch.device, pretrained: dict | None) -> dict:
     """Everything needed to rebuild and audit the run; stored in config.json and final.pt."""
     return {
         "checkpoint_format_version": CHECKPOINT_FORMAT, "model_name": model_name,
         "model_architecture": ({"depths": list(model.depths), "channels": list(model.channels)}
                                if hasattr(model, "depths") else {"name": model_name}),
-        "initialization": "random", "pretrained_weights": None,
+        "initialization": "imagenet_1k" if pretrained else "random", "pretrained_weights": pretrained,
         "execution_controls": controls.to_dict(),
         "augmentation_config": augmentation.to_dict(),
         "preprocessing_config": preprocessing.to_dict() if preprocessing.name != "none" else None,
@@ -119,6 +120,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     controls = controls_from_args(args)
     if model_name == "small_cnn_v1" and controls.drop_path is not None:
         raise ValueError("DropPath applies to ConvNeXt only.")
+    if (model_name in PRETRAINED_MODELS) != (args.pretrained_weights is not None):
+        raise ValueError("--pretrained-weights is required for, and only allowed with, convnext_tiny_in1k.")
     if min(args.epochs, args.batch_size, args.threads) < 1 or args.workers < 0:
         raise ValueError("Epochs, batch size and threads must be positive.")
     if args.lr <= 0 or args.weight_decay < 0:
@@ -151,8 +154,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if preprocessing.crops:
             image_size = (preprocessing.crop_height, preprocessing.crop_width)
 
-    model = create_model(model_name, input_channels=controls.context_slices,
-                         drop_path=controls.drop_path).to(device)
+    model = create_model(model_name, input_channels=controls.context_slices, drop_path=controls.drop_path)
+    # Optional ImageNet-1k backbone (cited in models/pretrained.py); the AD classifier stays random.
+    pretrained = load_imagenet_weights(model, args.pretrained_weights) if args.pretrained_weights else None
+    model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     ema = ModelEMA(model, args.ema_decay) if args.ema_decay else None
     final_model = ema.module if ema is not None else model  # Weights that are scored and saved.
@@ -174,7 +179,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                              preprocessing=preprocessing, context_slices=controls.context_slices)
 
     config = build_config(args, model_name, model, controls, augmentation, preprocessing, image_size,
-                          data, pos_weight, sampling_config, crop_fit, device)
+                          data, pos_weight, sampling_config, crop_fit, device, pretrained)
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "config.json", config)
     preprocessing_audits = {}
@@ -270,6 +275,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--splits-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", choices=tuple(MODEL_CHOICES), default="convnext_lite")
+    parser.add_argument("--pretrained-weights", type=Path, default=None,
+                        help="Official convnext_tiny_1k_224_ema.pth (Liu et al. 2022); only for convnext_tiny_in1k.")
     parser.add_argument("--fold", type=int, default=1)
     add_execution_arguments(parser)
     add_preprocessing_arguments(parser)
