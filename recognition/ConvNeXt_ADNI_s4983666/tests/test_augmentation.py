@@ -19,7 +19,7 @@ def gradient_image(width: int = 32, height: int = 24) -> Image.Image:
 
 class AugmentationTests(unittest.TestCase):
     def test_profiles_and_round_trip(self):
-        self.assertEqual(AUGMENTATION_NAMES, ("none", "light", "strong"))
+        self.assertEqual(AUGMENTATION_NAMES, ("none", "light", "strong", "scanner"))
         for name in AUGMENTATION_NAMES:
             config = make_augmentation(name)
             self.assertEqual(AugmentationConfig.from_dict(config.to_dict()), config)
@@ -32,10 +32,11 @@ class AugmentationTests(unittest.TestCase):
     def test_none_is_identity_and_strong_keeps_size_mode_and_black_background(self):
         image = gradient_image()
         self.assertIs(augment_image(image, make_augmentation("none"), random.Random(0)), image)
-        for seed in range(20):
-            out = augment_image(image, make_augmentation("strong"), random.Random(seed))
-            self.assertEqual((out.size, out.mode), (image.size, image.mode))
-            self.assertEqual(out.getpixel((0, 0)), 0)  # Corners stay background.
+        for name in ("strong", "scanner"):
+            for seed in range(20):
+                out = augment_image(image, make_augmentation(name), random.Random(seed))
+                self.assertEqual((out.size, out.mode), (image.size, image.mode))
+                self.assertEqual(out.getpixel((0, 0)), 0)  # Corners stay background.
         self.assertEqual(list(image.getdata()), list(gradient_image().getdata()))  # Input untouched.
 
     def test_same_seed_gives_same_result_and_flip_reverses_brightness_ramp(self):
@@ -55,9 +56,34 @@ class AugmentationTests(unittest.TestCase):
         self.assertEqual(list(red.getdata()), list(green.getdata()))
         self.assertEqual(list(red.getdata()), list(blue.getdata()))
 
+    def test_scanner_perturbations_are_seeded_and_keep_the_background(self):
+        image = gradient_image()
+        scanner = make_augmentation("scanner")
+        first = augment_image(image, scanner, random.Random(11))
+        self.assertEqual(list(first.getdata()), list(augment_image(image, scanner, random.Random(11)).getdata()))
+        # Bias field alone only darkens, by at most its strength.
+        field_only = AugmentationConfig("scanner", bias_field=0.3)
+        darker = augment_image(image, field_only, random.Random(0))
+        for before, after in zip(image.getdata(), darker.getdata()):
+            self.assertLessEqual(after, before)
+            self.assertGreaterEqual(after, 0.7 * before - 1)
+        # Noise alone changes the head but never the black background.
+        noise_only = AugmentationConfig("scanner", noise_std=0.05)
+        noisy = augment_image(image, noise_only, random.Random(0))
+        changed = [(a, b) for a, b in zip(image.getdata(), noisy.getdata()) if a != b]
+        self.assertTrue(changed)
+        self.assertTrue(all(a > 0 for a, _ in changed))
+        # Stacked context bands share geometry, field and blur; only the noise is drawn per band.
+        stacked = Image.merge("RGB", [image, image, image])
+        without_noise = AugmentationConfig(**{**scanner.to_dict(), "noise_std": 0.0})
+        red, green, blue = augment_image(stacked, without_noise, random.Random(5)).split()
+        self.assertEqual(list(red.getdata()), list(green.getdata()))
+        self.assertEqual(list(red.getdata()), list(blue.getdata()))
+
     def test_ranges_are_bounded(self):
         for field, value in (("rotation_degrees", 45.0), ("min_crop_scale", 0.2),
-                             ("flip_probability", 1.5), ("gamma_range", 0.9)):
+                             ("flip_probability", 1.5), ("gamma_range", 0.9),
+                             ("bias_field", 0.8), ("noise_std", 0.2), ("blur_sigma", 3.0)):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 AugmentationConfig("strong", **{field: value})
 
