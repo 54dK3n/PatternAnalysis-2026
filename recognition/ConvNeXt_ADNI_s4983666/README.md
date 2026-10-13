@@ -63,6 +63,7 @@ ConvNeXt_ADNI_s4983666/
 ├── adni_splits.py        # Audit / prepare / verify the patient-level split
 ├── audit_preprocessing.py
 ├── probe_acquisition.py  # Acquisition-style probe (docs/ACQUISITION_CONFOUND.md)
+├── explain_gradcam.py    # Grad-CAM figures on validation patients
 ├── engine/               # Training loop, EMA, LR schedule, prediction
 ├── evaluation/           # Metrics, inference, calibration, reporting, resource profiling
 ├── utils/                # Runtime/seeding, output files, plots, training controls
@@ -155,11 +156,27 @@ python predict.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" -
     --output runs/lite_fold1/final_calibration
 python predict.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --role test \
     --calibration-file runs/lite_fold1/final_calibration/calibration.json --output runs/lite_fold1/final_test
+
+# Optional: the five fold models as one ensemble (mean logit; calibration/test only).
+python predict.py --checkpoint runs/cv/fold{1,2,3,4,5}/final.pt --splits-dir "$SPLITS" --role calibration \
+    --output runs/cv_ensemble/calibration
+
+# Grad-CAM of a checkpoint on its fold's validation patients (never calibration/test).
+python explain_gradcam.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --output runs/lite_fold1/gradcam
 ```
+
+When the metadata file names carry acquisition dates, `predict.py` also reports
+scan/patient metrics and referral counts separately for scans acquired before
+and from 2017 (`by_acquisition_period` in `metrics.json`; see
+[docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md)).
+`explain_gradcam.py` (Selvaraju et al., 2017) writes the most confident correct
+and wrong cases per diagnosis x acquisition period, the mean map of each group
+and the share of each map that falls outside the head.
 
 On Rangpur, `sbatch slurm/run_plan.sbatch config/experiments_round3_cv.json --smoke`
 checks every planned case for one epoch, `--cases <id> ...` runs selected cases,
-and `sbatch slurm/final_eval.sbatch <run dir>` performs the two final steps.
+and `sbatch slurm/final_eval.sbatch <output dir> <run dir> [<run dir> ...]` performs the
+two final steps for one model or a fold ensemble.
 After every case the runner reloads `final.pt` and checks that the re-scored
 accuracy and AUROC equal the training run's (`replay_check.json`).
 `python slurm/summarize_runs.py <plan dirs> --output <prefix> --baseline <group> --candidate <group>`
@@ -236,6 +253,31 @@ results and possible mitigations: [docs/ACQUISITION_CONFOUND.md](docs/ACQUISITIO
 `TODO(result)`: the one-time test result of the final pipeline at slice, scan
 and patient level (target: accuracy >= 0.80), overall and for scans acquired
 2017-2019.
+
+### Fold 4-5 screens: scanner augmentation and ImageNet initialisation
+
+Two attempts to weaken the acquisition shortcut were screened on folds 4 and 5
+(one seed each; details in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)).
+Validation accuracy slice / scan / patient, and scan AUROC on the 2017-2019
+validation scans:
+
+| Run | Fold 4 | Fold 5 | 2017-19 scan AUROC (f4, f5) |
+|---|---|---|---|
+| ConvNeXt-Tiny scratch, strong aug. (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 |
+| SmallCNN, strong aug. (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 |
+| ConvNeXt-Tiny scratch, scanner aug. | 0.738 / 0.763 / 0.729 | 0.720 / 0.774 / 0.789 | 0.779, 0.725 |
+| SmallCNN, scanner aug. | 0.758 / 0.828 / 0.823 | 0.756 / 0.764 / 0.768 | 0.752, 0.710 |
+| ConvNeXt-Tiny ImageNet-1k, strong aug. | 0.817 / 0.847 / 0.844 | 0.773 / 0.774 / 0.821 | 0.770, 0.740 |
+| ConvNeXt-Tiny ImageNet-1k, scanner aug. | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 |
+
+* ImageNet initialisation (cited weights, 40 epochs) gives the best overall
+  accuracy so far, but discrimination within 2017-2019 stays at the level of
+  the scratch model: the gain comes mostly from scans whose acquisition style
+  already identifies the class.
+* Scanner-style augmentation helps the CNN, is mixed for scratch ConvNeXt and
+  adds nothing to the pretrained model.
+* `TODO(result)`: five-fold ImageNet-initialised ConvNeXt-Tiny
+  (`config/experiments_round6_pretrained_cv.json`) against the round-3 table.
 
 ### Earlier development screens (fold 1)
 
@@ -342,3 +384,4 @@ and review of every result against the run's `metrics.json`.
 7. PyTorch reproducibility notes, https://docs.pytorch.org/docs/stable/notes/randomness.html
 8. R. Geirhos et al., "Shortcut learning in deep neural networks", Nature Machine Intelligence, 2020. https://arxiv.org/abs/2004.07780
 9. J. R. Zech et al., "Variable generalization performance of a deep learning model to detect pneumonia in chest radiographs: a cross-sectional study", PLOS Medicine, 2018.
+10. R. R. Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization", ICCV 2017. https://arxiv.org/abs/1610.02391
