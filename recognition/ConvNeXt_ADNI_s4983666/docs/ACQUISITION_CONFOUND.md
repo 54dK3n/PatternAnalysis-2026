@@ -127,7 +127,8 @@ fixed**, and scores each fold once on its validation patients (Slurm job
 | Option | Idea | Cost / caveat |
 |---|---|---|
 | Report by acquisition period | Overall and 2017-2019-only metrics, here and on test | Free; does not change the model |
-| Scanner-robust augmentation | Random bias field, noise, blur/sharpening, stronger contrast/gamma so texture and contrast stop identifying the scanner | Implemented as the `scanner` profile; screened on folds 4-5 in `config/experiments_round4_scanner_aug.json` (Slurm 653053). Results: `TODO(result)` |
+| Scanner-robust augmentation | Random bias field, noise, blur/sharpening, stronger contrast/gamma so texture and contrast stop identifying the scanner | Implemented as the `scanner` profile. Screened on folds 4-5 (Slurm 653053): CNN 2017-19 scan AUROC 0.718 / 0.560 -> 0.752 / 0.710; scratch ConvNeXt 0.818 / 0.696 -> 0.779 / 0.725; no gain with ImageNet initialisation. Helps the CNN, mixed otherwise ([EXPERIMENTS.md](EXPERIMENTS.md)) |
+| ImageNet initialisation | Generic pretrained features instead of features learnt only from this confounded data (round 5) | Overall accuracy up (fold 4 slice 0.817), 2017-19 scan AUROC unchanged (0.770 / 0.740); does not remove the shortcut |
 | Train only on 2017-2019 scans | Removes the period cue completely | Only 86 AD scans left; likely too few |
 | Re-weight by period x diagnosis | Up-weight 2017-2019 AD scans | Cannot balance cells that are empty (no NC before 2017) |
 | Adversarial removal of the scanner signal | Gradient reversal on a vendor/period head, conditioned on diagnosis | More complex; risk of removing disease signal |

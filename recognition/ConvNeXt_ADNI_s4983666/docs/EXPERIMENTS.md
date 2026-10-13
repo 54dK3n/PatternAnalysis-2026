@@ -145,3 +145,51 @@ patients (95-96), so the five folds cover all 476 development patients.
   AD scans acquired 2017-2019 (the same period as all NC scans) are missed far
   more often, and scan AUROC on the 2017-2019 subset is 0.729 (ConvNeXt) and
   0.654 (CNN) instead of 0.850 and 0.839.
+
+## Rounds 4 and 5: scanner-style augmentation and ImageNet initialisation (folds 4 and 5)
+
+Two attempts to weaken the acquisition shortcut, screened on folds 4 and 5
+(fold 5 was the weakest fold and has the most 2017-2019 AD validation scans).
+All runs keep the round-3 pipeline (three-slice context, EMA 0.999,
+final-epoch weights) and differ only as listed; every checkpoint replayed
+exactly.
+
+* Round 4, [`config/experiments_round4_scanner_aug.json`](../config/experiments_round4_scanner_aug.json)
+  (Slurm 653053): the `scanner` augmentation profile (random bias field,
+  noise inside the head, blur/sharpening, stronger gain/gamma), 80 epochs,
+  ConvNeXt-Tiny from scratch and the CNN.
+* Round 5, [`config/experiments_round5_pretrained.json`](../config/experiments_round5_pretrained.json)
+  (Slurm 653854): ConvNeXt-Tiny initialised from the official ImageNet-1k
+  weights (Liu et al. 2022; SHA-256 in the README), 40 epochs, learning rate
+  5e-5, with the strong or the scanner profile.
+
+Validation accuracy (slice / scan / patient) and the 2017-2019 subset (scan
+AUROC, AD scans acquired 2017-2019 that were called NC):
+
+| Run | Fold 4 | Fold 5 | 2017-19 scan AUROC (f4, f5) | 2017-19 AD missed (f4, f5) |
+|---|---|---|---|---|
+| Tiny scratch, strong (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 | 10/24, 24/26 |
+| CNN, strong (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 | 22/24, 16/26 |
+| Tiny scratch, scanner | 0.738 / 0.763 / 0.729 | 0.720 / 0.774 / 0.789 | 0.779, 0.725 | 11/24, 9/26 |
+| CNN, scanner | 0.758 / 0.828 / 0.823 | 0.756 / 0.764 / 0.768 | 0.752, 0.710 | 17/24, 26/26 |
+| Tiny ImageNet, strong | **0.817 / 0.847 / 0.844** | 0.773 / 0.774 / 0.821 | 0.770, 0.740 | 14/24, 22/26 |
+| Tiny ImageNet, scanner | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 | 16/24, 20/26 |
+
+(2017-2019 validation scans: 135 with 24 AD on fold 4, 131 with 26 AD on fold 5.)
+
+* ImageNet initialisation gives the highest overall accuracy seen so far
+  (fold 4: 0.817 / 0.847 / 0.844, above 0.80 at slice, scan and patient
+  level; fold 5: slice 0.773) and the highest scan AUROC (0.900-0.920), in half
+  the epochs. Training accuracy reaches 0.999-1.00.
+* It does **not** improve discrimination inside 2017-2019 beyond the scratch
+  model (AUROC 0.72-0.77 vs 0.70-0.82), and it still misses most 2017-2019 AD
+  scans on fold 5. The gain is concentrated on scans whose acquisition style
+  already identifies the class.
+* The scanner profile helps the CNN clearly on both folds (+0.025 / +0.092
+  slice accuracy, 2017-19 AUROC +0.03 / +0.15), gives mixed results for scratch
+  ConvNeXt (fold 4 worse, fold 5 better, and on fold 5 it finds 17 of 26
+  2017-2019 AD scans instead of 2) and no benefit for the pretrained model.
+* Two folds and one seed per configuration: differences of a few points are
+  within the fold/seed noise measured in rounds 2 and 3. Rounds 4 and 5 are
+  screens, not a model selection; round 6 runs the pretrained model on all
+  five folds for a like-for-like comparison with round 3.
