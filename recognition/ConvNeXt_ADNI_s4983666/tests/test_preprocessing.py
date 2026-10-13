@@ -197,7 +197,7 @@ class PreprocessedTrainingTests(unittest.TestCase):
             **saved["config"]["preprocessing_config"], "algorithm": "unknown"}}}
         bad_path = self.fixture.base / "bad.pt"
         torch.save(broken, bad_path)
-        prediction_args.checkpoint, prediction_args.output = bad_path, self.fixture.base / "rejected"
+        prediction_args.checkpoint, prediction_args.output = [bad_path], self.fixture.base / "rejected"
         with mock.patch("engine.prediction.load_fold") as load_fold, self.assertRaises(ValueError), \
                 contextlib.redirect_stdout(io.StringIO()):
             prediction.run(prediction_args)

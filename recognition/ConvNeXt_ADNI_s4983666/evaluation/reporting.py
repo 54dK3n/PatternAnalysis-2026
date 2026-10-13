@@ -87,3 +87,41 @@ def prediction_report(slices: list[dict], scans: list[dict], bins: int = 15,
                                                 [r["probability"] for r in patients]),
               "accuracy_target": {"minimum_accuracy": 0.8, "units": ["slice", "scan", "patient"]}}
     return report, patients
+
+
+def acquisition_breakdown(scans: list[dict], patients: list[dict], years: dict[str, int],
+                          shared_start: int) -> dict | None:
+    """Scan and patient metrics split by acquisition period (docs/ACQUISITION_CONFOUND.md).
+
+    ``years`` maps image ID to acquisition year. A patient belongs to a period
+    only if all of their scans do. When patients carry a ``decision`` (AD, NC
+    or REFER) the referral counts and the accuracy of automated decisions are
+    reported too. Returns None when no scan has a known year.
+    """
+    if not any(scan["image_id"] in years for scan in scans):
+        return None
+    period = {scan["image_id"]: ("unknown" if scan["image_id"] not in years else
+                                 f"from_{shared_start}" if years[scan["image_id"]] >= shared_start
+                                 else f"before_{shared_start}") for scan in scans}
+    patient_periods = {}
+    for scan in scans:
+        patient_periods.setdefault((scan["patient_id"], scan["label"]), set()).add(period[scan["image_id"]])
+    result = {}
+    for name in sorted(set(period.values())):
+        group_scans = [s for s in scans if period[s["image_id"]] == name]
+        group_patients = [p for p in patients if patient_periods.get((p["patient_id"], p["label"])) == {name}]
+        entry = {"scans": binary_metrics([s["label"] for s in group_scans], [s["probability"] for s in group_scans]),
+                 "scan_counts": {"AD": sum(s["label"] == 1 for s in group_scans),
+                                 "NC": sum(s["label"] == 0 for s in group_scans)}}
+        if group_patients and len({p["label"] for p in group_patients}) == 2:
+            entry["patients"] = binary_metrics([p["label"] for p in group_patients],
+                                               [p["probability"] for p in group_patients])
+        if group_patients and "decision" in group_patients[0]:
+            automated = [p for p in group_patients if p["decision"] != "REFER"]
+            entry["referral"] = {
+                "patients": len(group_patients), "referred": len(group_patients) - len(automated),
+                "automated_accuracy": (sum((p["decision"] == "AD") == (p["label"] == 1) for p in automated)
+                                       / len(automated)) if automated else None,
+                "missed_ad_automated": sum(p["decision"] == "NC" and p["label"] == 1 for p in automated)}
+        result[name] = entry
+    return result
