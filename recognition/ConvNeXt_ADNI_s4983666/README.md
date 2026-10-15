@@ -116,7 +116,8 @@ ConvNeXt_ADNI_s4983666/
 ├── slurm/                # Rangpur batch scripts and the experiment-plan runner
 ├── config/               # Requirements and experiment plans
 ├── docs/                 # Data protocol, preprocessing notes, development experiments
-├── figures/              # README figures (plots of saved results; no MRI pixels)
+├── figures/              # README figures (plots of saved results)
+│   └── adni/             # De-identified ADNI slices: test examples, failures, Grad-CAM
 └── tests/                # Unit and end-to-end tests on synthetic data
 ```
 
@@ -245,6 +246,13 @@ test slice: accuracy=0.8667 AUROC=0.9429123028256317 (n=6120)
 ```
 
 and saves `test_examples.png` (input slice, true label, p(AD), decision).
+Example input and output of the final test (primary ensemble): the middle
+slice of the patient's first scan, with the patient-level calibrated p(AD)
+and the decision. Top row: the four most confident automated patients (all
+correct); bottom row: the four least confident referred patients (patient and
+scan IDs removed).
+
+![Test examples](figures/adni/test_examples.png)
 
 ## Results
 
@@ -420,7 +428,20 @@ ConvNeXt-Tiny 0.36-0.46, SmallCNN 0.22-0.31, with little difference between
 diagnosis/period groups. The scratch ConvNeXt's evidence is not localised to the
 head. Tables and caveats:
 [docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md#grad-cam-where-the-evidence-lies).
-`TODO(owner)`: interpretation and selected figures.
+
+Mean input (top) and mean Grad-CAM (bottom) per diagnosis and acquisition
+group, fold 5 validation scans:
+
+| ConvNeXt-Tiny, scratch | ConvNeXt-Tiny, ImageNet init. | SmallCNN |
+|---|---|---|
+| ![](figures/adni/gradcam_means_scratch_fold5.png) | ![](figures/adni/gradcam_means_pretrained_fold5.png) | ![](figures/adni/gradcam_means_cnn_fold5.png) |
+
+Individual scans for the ImageNet-initialised model (two most confident
+correct and two most confident wrong per group; input slice, then Grad-CAM):
+
+![Grad-CAM cases](figures/adni/gradcam_cases_pretrained_fold5.png)
+
+`TODO(owner)`: interpretation.
 
 ### Earlier development screens (fold 1)
 
@@ -547,8 +568,18 @@ ensemble runs five such passes): ConvNeXt-Tiny 5.37 ± 0.05 ms (batch 1) and
 
 ## Failure case autopsy
 
-`TODO(owner)`: 3-5 test failures (confident false positives/negatives and
-referred borderline cases) exported by `predict.py`, with their interpretation.
+The five most confident slice-level errors of the primary ensemble on the
+test set, as exported by `predict.py` (one slice per patient; titles give the
+slice probability and the patient-level probability and decision; IDs removed).
+All five come from scans acquired 2017-2019. The three false-positive slices
+belong to NC patients that are also automated as AD at patient level; the two
+false-negative slices belong to AD patients automated as NC, i.e. to the
+confident misses in the AD 2017-2019 group described above.
+
+![Most confident test failures](figures/adni/test_failures.png)
+
+`TODO(owner)`: 3-5 failure autopsies (these cases and/or the referred
+borderline cases in the test examples above), with their interpretation.
 
 ## Recommendation to the project manager
 
