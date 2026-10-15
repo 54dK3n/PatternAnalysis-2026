@@ -116,7 +116,8 @@ ConvNeXt_ADNI_s4983666/
 ├── slurm/                # Rangpur batch scripts and the experiment-plan runner
 ├── config/               # Requirements and experiment plans
 ├── docs/                 # Data protocol, preprocessing notes, development experiments
-├── figures/              # README figures (plots of saved results; no MRI pixels)
+├── figures/              # README figures (plots of saved results)
+│   └── adni/             # De-identified ADNI slices: test examples, failures, Grad-CAM
 └── tests/                # Unit and end-to-end tests on synthetic data
 ```
 
@@ -245,6 +246,13 @@ test slice: accuracy=0.8667 AUROC=0.9429123028256317 (n=6120)
 ```
 
 and saves `test_examples.png` (input slice, true label, p(AD), decision).
+Example input and output of the final test (primary ensemble): the middle
+slice of the patient's first scan, with the patient-level calibrated p(AD)
+and the decision. Top row: the four most confident automated patients (all
+correct); bottom row: the four least confident referred patients (patient and
+scan IDs removed).
+
+![Test examples](figures/adni/test_examples.png)
 
 ## Results
 
@@ -420,7 +428,20 @@ ConvNeXt-Tiny 0.36-0.46, SmallCNN 0.22-0.31, with little difference between
 diagnosis/period groups. The scratch ConvNeXt's evidence is not localised to the
 head. Tables and caveats:
 [docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md#grad-cam-where-the-evidence-lies).
-`TODO(owner)`: interpretation and selected figures.
+
+Mean input (top) and mean Grad-CAM (bottom) per diagnosis and acquisition
+group, fold 5 validation scans:
+
+| ConvNeXt-Tiny, scratch | ConvNeXt-Tiny, ImageNet init. | SmallCNN |
+|---|---|---|
+| ![](figures/adni/gradcam_means_scratch_fold5.png) | ![](figures/adni/gradcam_means_pretrained_fold5.png) | ![](figures/adni/gradcam_means_cnn_fold5.png) |
+
+Individual scans for the ImageNet-initialised model (two most confident
+correct and two most confident wrong per group; input slice, then Grad-CAM):
+
+![Grad-CAM cases](figures/adni/gradcam_cases_pretrained_fold5.png)
+
+`TODO(owner)`: interpretation.
 
 ### Earlier development screens (fold 1)
 
@@ -547,8 +568,18 @@ ensemble runs five such passes): ConvNeXt-Tiny 5.37 ± 0.05 ms (batch 1) and
 
 ## Failure case autopsy
 
-`TODO(owner)`: 3-5 test failures (confident false positives/negatives and
-referred borderline cases) exported by `predict.py`, with their interpretation.
+The five most confident slice-level errors of the primary ensemble on the
+test set, as exported by `predict.py` (one slice per patient; titles give the
+slice probability and the patient-level probability and decision; IDs removed).
+All five come from scans acquired 2017-2019. The three false-positive slices
+belong to NC patients that are also automated as AD at patient level; the two
+false-negative slices belong to AD patients automated as NC, i.e. to the
+confident misses in the AD 2017-2019 group described above.
+
+![Most confident test failures](figures/adni/test_failures.png)
+
+`TODO(owner)`: 3-5 failure autopsies (these cases and/or the referred
+borderline cases in the test examples above), with their interpretation.
 
 ## Recommendation to the project manager
 
@@ -556,15 +587,52 @@ referred borderline cases) exported by `predict.py`, with their interpretation.
 
 ## Artificial Intelligence Usage Disclosure
 
-`TODO(owner)`: final disclosure (tools, tasks, and how the output was verified).
+Two AI coding assistants were used throughout this project. A dated log of
+every assisted task (what was generated and what I had to check) was kept
+locally while working and is the source of this summary.
 
-Development notes for that disclosure: OpenAI Codex assisted with the split
-audit, models, training/inference code, metrics, tests and documentation in
-earlier milestones. Claude Code (Anthropic) assisted on 9 October 2026 with the
-log analysis of the Rangpur runs, the strong augmentation and slice-context
-input, EMA, the calibration/test workflow, test updates and this README.
-Verification: synthetic unit and end-to-end tests, hand-computed metric checks
-and review of every result against the run's `metrics.json`.
+**Tools.** OpenAI Codex (26 September - 8 October 2026) and Claude Code with
+Anthropic Claude models (9 - 16 October 2026). `TODO(owner)`: confirm whether
+any AI tool was used before 26 September (initial split and data-loading
+commits) and add exact model names if required.
+
+**What the tools did.**
+
+* *Codex:* the read-only data audit and the patient-level split checks; the
+  migration to the current package layout; the CNN baseline and ConvNeXt
+  implementations with their tests; the first training and evaluation code
+  (metrics, calibration, resource profiling); Slurm launch scripts; feature and
+  sampling diagnostics; monitoring of the early Rangpur runs; and a reading of
+  the assignment specification against the code.
+* *Claude Code:* review of the Rangpur logs and the decisions they led to
+  (strong augmentation, three-slice context input, EMA, fixed-epoch training
+  with final-epoch weights, merging the early-stop subset into training); the
+  experiment-plan runner and summary scripts; the acquisition-period analysis
+  and probe; scanner-style augmentation; loading the cited ImageNet-1k weights;
+  Grad-CAM; the fold ensemble and the calibration/test workflow; post-hoc
+  statistics (bootstrap, McNemar, risk-coverage) and the report figures,
+  including removing patient IDs from the ADNI figures; drafting and editing
+  this README and the documents in `docs/`.
+
+**What I did and decided.** Choice of the project and of the evaluation units;
+the frozen patient-level split; which experiments to run and which recipe to
+carry forward; the decision to fit the threshold on a separate calibration set
+and to score the test set once with a predeclared model; running all jobs on
+Rangpur; every commit (the assistants never committed or pushed); and the
+feasibility review, Grad-CAM interpretation, failure autopsy and
+recommendation, which I wrote myself.
+
+**How the output was verified.** Unit and end-to-end tests on synthetic data;
+an assertion that no patient appears in two splits; each training run replays
+its saved checkpoint and must reproduce its own validation metrics
+(`replay_check.json`); the uncalibrated ECE recomputed from raw logits matched
+the job's own calibrated values; every number in this README was checked
+against the `metrics.json` or JSON summary it was copied from; and I read and
+ran the code before each commit. AI output was wrong several times (for
+example a wrong count of slices per patient and figure layouts that cut off
+labels) and was corrected after review.
+`TODO(owner)`: check that this matches your own account and rewrite it in your
+own words.
 
 ## References
 
