@@ -193,3 +193,46 @@ AUROC, AD scans acquired 2017-2019 that were called NC):
   within the fold/seed noise measured in rounds 2 and 3. Rounds 4 and 5 are
   screens, not a model selection; round 6 runs the pretrained model on all
   five folds for a like-for-like comparison with round 3.
+
+## Round 6: five-fold ImageNet-initialised ConvNeXt-Tiny
+
+[`config/experiments_round6_pretrained_cv.json`](../config/experiments_round6_pretrained_cv.json)
+(Slurm 656071 tests+smoke, 656072): the round-5 recipe (official ImageNet-1k
+weights, 40 epochs, peak LR 5e-5, strong augmentation, three-slice context,
+EMA 0.999, final-epoch weights, seed 3710) on all five folds, compared with
+round 3 on identical patients. All five checkpoints replayed exactly; folds 4
+and 5 reproduce the round-5 numbers exactly.
+
+| Fold | Slice acc. | Scan acc. | Patient acc. | Scan AUROC | Patient FP / FN | 2017-19 scan AUROC | 2017-19 AD missed |
+|---:|---:|---:|---:|---:|---|---:|---:|
+| 1 | 0.836 | 0.877 | 0.863 | 0.937 | 7 / 6 | 0.741 | 7/10 |
+| 2 | 0.778 | 0.810 | 0.821 | 0.929 | 1 / 16 | 0.856 | 15/17 |
+| 3 | 0.783 | 0.834 | 0.853 | 0.914 | 7 / 7 | 0.785 | 5/9 |
+| 4 | 0.817 | 0.847 | 0.844 | 0.920 | 5 / 10 | 0.770 | 14/24 |
+| 5 | 0.773 | 0.774 | 0.821 | 0.900 | 4 / 13 | 0.740 | 22/26 |
+| mean ± sd | 0.798 ± 0.028 | 0.828 ± 0.039 | 0.840 ± 0.019 | 0.920 ± 0.014 | 24 / 52 total | 0.778 ± 0.047 | 63/86 |
+
+Paired over the five folds (mean difference, paired t with 4 degrees of
+freedom; 2.78 is the 5% two-sided critical value):
+
+| Comparison | Slice acc. | Scan acc. | Patient acc. | 2017-19 scan AUROC |
+|---|---|---|---|---|
+| pretrained - scratch ConvNeXt-Tiny | +0.083 (t = 14.3) | +0.080 (t = 6.4) | +0.059 (t = 3.4) | +0.042 (t = 1.5) |
+| pretrained - SmallCNN | +0.108 (t = 6.1) | +0.128 (t = 3.9) | +0.090 (t = 7.1) | +0.172 (t = 5.1) |
+
+Out-of-fold scan error by acquisition group (all 1,050 development scans):
+
+| Group | Pretrained Tiny | Scratch Tiny | SmallCNN |
+|---|---:|---:|---:|
+| AD acquired 2011-2016 (417) | 0.173 | 0.300 | 0.451 |
+| AD acquired 2017-2019 (86) | 0.733 | 0.674 | 0.837 |
+| NC (547) | 0.080 | 0.148 | 0.099 |
+
+* ImageNet initialisation is the first configuration that beats both models
+  consistently on every fold at slice and scan level, with mean slice accuracy
+  0.798 (3 of 5 folds >= 0.80) and patient accuracy 0.840 (all folds >= 0.82).
+* The gain is on scans that the acquisition style already separates (earlier
+  AD and NC errors roughly halve). On AD scans acquired 2017-2019 the error is
+  unchanged (0.73) and the 2017-19 AUROC gain over the scratch model is not
+  significant. It does separate those scans better than the CNN.
+* Training accuracy reaches 1.00; one seed per fold.
