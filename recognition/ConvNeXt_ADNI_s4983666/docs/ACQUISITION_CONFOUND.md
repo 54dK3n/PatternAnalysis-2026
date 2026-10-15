@@ -111,6 +111,50 @@ fixed**, and scores each fold once on its validation patients (Slurm job
   confounded: 2017-2019 AD patients are newer ADNI-3 enrolments and may differ
   in disease stage, not only in acquisition.
 
+## Grad-CAM: where the evidence lies
+
+[`explain_gradcam.py`](../explain_gradcam.py) (Selvaraju et al. 2017; Slurm
+job 656034) explains the middle slice of every validation scan of folds 4 and 5
+for three checkpoints, using the last feature stage and the predicted class.
+"Outside head" is the share of the map's mass on background pixels. As a
+reference, background covers 0.72 of these slices on average (pixels exactly 0
+in the source JPEGs, 410 slices), so a map spread uniformly over the image
+would score about 0.72 and a map confined to the head would score near 0.
+
+| Checkpoint (fold 4 / fold 5) | Outside head: AD 2011-16 | AD 2017-19 | NC 2017-19 |
+|---|---|---|---|
+| ConvNeXt-Tiny scratch (round 3) | 0.716 / 0.720 | 0.823 / 0.776 | 0.830 / 0.771 |
+| ConvNeXt-Tiny ImageNet-1k (round 5, strong aug.) | 0.378 / 0.447 | 0.398 / 0.464 | 0.357 / 0.404 |
+| SmallCNN (round 3) | 0.230 / 0.272 | 0.222 / 0.267 | 0.308 / 0.273 |
+
+Scan accuracy and mean p(AD) of the same groups (fold 4 / fold 5):
+
+| Checkpoint | AD 2011-16 acc. (mean p) | AD 2017-19 acc. (mean p) | NC 2017-19 acc. (mean p) |
+|---|---|---|---|
+| ConvNeXt-Tiny scratch | 0.762 (0.74) / 0.625 (0.64) | 0.583 (0.54) / 0.077 (0.24) | 0.811 (0.21) / 0.848 (0.18) |
+| ConvNeXt-Tiny ImageNet-1k | 0.887 (0.85) / 0.797 (0.79) | 0.417 (0.39) / 0.154 (0.23) | 0.910 (0.12) / 0.914 (0.11) |
+| SmallCNN | 0.775 (0.63) / 0.812 (0.71) | 0.083 (0.26) / 0.385 (0.40) | 0.937 (0.15) / 0.724 (0.36) |
+
+Observations (descriptive only):
+
+* The scratch ConvNeXt-Tiny maps are not concentrated on the head: their
+  outside share is at or above the uniform reference, and the group means show
+  a block pattern at the 1/32 resolution of the last stage rather than a
+  head-shaped region.
+* The ImageNet-initialised model and the CNN put most of the map inside the
+  head (0.36-0.46 and 0.22-0.31). The CNN maps follow the head outline; the
+  pretrained maps form one central region.
+* Within each checkpoint the outside share hardly differs between the groups,
+  including the AD 2017-2019 scans that are mostly missed, so the maps alone do
+  not show *which* cue separates the acquisition periods.
+* Caveats: the last ConvNeXt stage has a 7x8 grid, so its maps are coarse; a
+  large receptive field can carry head information into background cells;
+  middle slices are not registered, so group means are indicative only.
+
+`TODO(owner)`: anatomical interpretation of the maps and the chosen example
+figures (`gradcam_cases.png`, `gradcam_group_means.png` per checkpoint in the
+local experiment archive `outputs/experiment_logs/gradcam_20261013/`).
+
 ## Consequences
 
 * Development accuracy and AUROC overstate how well the models detect
