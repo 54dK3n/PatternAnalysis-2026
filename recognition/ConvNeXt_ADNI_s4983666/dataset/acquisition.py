@@ -2,7 +2,7 @@
 
 Only used for analysis (docs/ACQUISITION_CONFOUND.md): the models never see
 these values. Example path:
-``ADNI_068_S_0473_MR_Accelerated_Sagittal_MPRAGE__br_raw_20171116173455030_44_S632432_I932015.nii``
+``ADNI_<NNN_S_NNNN>_MR_Accelerated_Sagittal_MPRAGE__br_raw_<YYYYMMDDhhmmss...>_<series>_I<scan ID>.nii``
 """
 
 import json

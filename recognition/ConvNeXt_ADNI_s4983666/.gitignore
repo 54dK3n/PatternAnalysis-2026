@@ -16,7 +16,9 @@ htmlcov/
 !.env.example
 
 # Course data and generated patient-level manifests stay outside Git.
-ADNI/
+/ADNI/
+!figures/adni/
+!figures/adni/*.png
 AD_NC/
 data/
 datasets/

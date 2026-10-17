@@ -20,6 +20,8 @@
 
 # Course data and generated patient-level manifests stay outside Git.
 /recognition/ConvNeXt_ADNI_s4983666/**/ADNI/
+!/recognition/ConvNeXt_ADNI_s4983666/figures/adni/
+!/recognition/ConvNeXt_ADNI_s4983666/figures/adni/*.png
 /recognition/ConvNeXt_ADNI_s4983666/**/AD_NC/
 /recognition/ConvNeXt_ADNI_s4983666/**/data/
 /recognition/ConvNeXt_ADNI_s4983666/**/datasets/

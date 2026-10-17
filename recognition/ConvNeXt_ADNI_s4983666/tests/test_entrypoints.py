@@ -93,6 +93,18 @@ class EntrypointTests(unittest.TestCase):
                 self.assertTrue(resolved.is_relative_to(ROOT))
                 self.assertEqual(digest, hashlib.sha256(resolved.read_bytes()).hexdigest())
 
+    def test_dataset_package_exports_match_dataset_facade(self):
+        """Importing dataset must expose the same public API as dataset.py."""
+        import importlib.util
+        import dataset
+
+        spec = importlib.util.spec_from_file_location("dataset_facade", ROOT / "dataset.py")
+        facade = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(facade)
+        self.assertEqual(dataset.__all__, facade.__all__)
+        for symbol in facade.__all__:
+            self.assertIs(getattr(dataset, symbol), getattr(facade, symbol))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ that slice with its two neighbours). Outputs:
 * ``gradcam_summary.json`` / ``gradcam_scans.csv`` - per-scan prediction, map
   share outside the head, and per-group averages.
 
-Groups are diagnosis x acquisition period (2011-2016 / 2017-2019, read from
+Groups are diagnosis x acquisition period (2011-2016 / 2017-2021, read from
 the metadata file names; docs/ACQUISITION_CONFOUND.md), so the maps of AD scans
 whose acquisition style is unique to AD can be compared with AD and NC scans
 acquired in the shared period. The middle slices of ADNI scans are roughly
@@ -39,7 +39,7 @@ from utils.runtime import seed_everything, select_device
 def group_of(scan: dict, info: dict) -> str:
     """Diagnosis and acquisition period of one scan ("unknown" if the metadata path has no date)."""
     year = info.get(scan["image_id"], {}).get("year")
-    period = "unknown" if year is None else "2017-19" if year >= SHARED_PERIOD_START else "2011-16"
+    period = "unknown" if year is None else "2017-21" if year >= SHARED_PERIOD_START else "2011-16"
     return f"{'AD' if scan['label'] else 'NC'} {period}"
 
 

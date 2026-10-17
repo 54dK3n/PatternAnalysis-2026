@@ -16,8 +16,11 @@ Profiles:
 
 Why each transform keeps the AD/NC label valid:
 
-* Horizontal flip: the slices are axial and AD atrophy is bilateral, so a
-  left-right mirror is still a plausible brain with the same diagnosis.
+* Horizontal flip: the slices are sagittal, so this mirrors the head
+  front-to-back. The atrophy patterns that separate AD from NC (enlarged
+  ventricles, widened sulci) are still present in the mirrored slice, but the
+  orientation itself never occurs in this data; the flip acts as a generic
+  regulariser rather than a realistic variation.
 * Crop, rotation and translation: head size, position and tilt vary between
   patients and scanners; the diagnosis does not depend on them.
 * Intensity gain and gamma: brightness and contrast vary between acquisitions.

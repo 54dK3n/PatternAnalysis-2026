@@ -7,7 +7,7 @@ ADNI dataset, AD versus cognitively normal (NC). Student s4983666.
 
 Alzheimer's disease (AD) causes progressive hippocampal and cortical atrophy and
 ventricular enlargement that are visible on structural T1-weighted MRI. The task
-is to classify 2D axial MRI slices of **previously unseen patients** as AD or NC,
+is to classify 2D sagittal MRI slices of **previously unseen patients** as AD or NC,
 while avoiding the main pitfall of this dataset: slices of one patient leaking
 into both training and evaluation. The model is ConvNeXt (Liu et al., 2022), a
 convolutional network that adopts design choices of vision transformers
@@ -40,8 +40,12 @@ fitted on calibration patients before the test patients are scored once.
 
 ## Feasibility review
 
-One-page review for the project manager (tutor check-off). `TODO(owner)`:
-check-off date and the tutor's feedback.
+One-page review for the project manager. Tutor check-off completed on
+Wednesday, 14 October 2026; the tutor noted that training did not need to use a
+fixed epoch count and that validation performance could be used to decide early
+stopping (tested via an inner validation subset in Rounds 1-2 before adopting
+EMA weight averaging over a fixed schedule so all 381 non-validation patients per
+fold could be used for training).
 
 **1. User need, scope and acceptance criteria.** The user is a research
 reviewer deciding whether an AD vs normal-control (NC) classifier for course
@@ -84,9 +88,9 @@ ConvNeXt-Tiny 0.798 (patient level 0.782 / 0.750 / 0.840). ConvNeXt-Tiny has
 against 97.8 k, 727 MiB and 1.16 ms for the CNN.
 
 **4. Risks, budget and fallback.** (a) Acquisition confound: every NC scan was
-acquired 2017-2019, while 417 of 503 AD scans are older, so models can learn
+acquired 2017-2021, while 417 of 503 AD scans are older, so models can learn
 scanner style instead of atrophy; results are therefore also reported on the
-2017-2019 scans, and Grad-CAM [10] is used to check where the evidence lies.
+2017-2021 scans, and Grad-CAM [10] is used to check where the evidence lies.
 (b) About 95 patients per validation fold, so differences below roughly 0.04
 are within noise; comparisons are paired by fold. (c) Overfitting (training
 accuracy 0.95-1.00). (d) The slice-level target is marginal on development
@@ -181,11 +185,13 @@ Optional per-scan intensity/crop standardisation is described in
 [docs/INPUT_PREPROCESSING.md](docs/INPUT_PREPROCESSING.md); it did not help in
 development and is off by default.
 
-**Augmentation (training slices only).** Horizontal flip (AD atrophy is
-bilateral), random-resized crop covering 85-100% of the area, rotation up to
+**Augmentation (training slices only).** Horizontal flip (on these sagittal
+slices a front-to-back mirror: it keeps the atrophy pattern but produces an
+orientation that does not occur in the data, so it acts as a generic
+regulariser), random-resized crop covering 85-100% of the area, rotation up to
 10 degrees, translation up to 5%, and intensity gain/gamma within ±10%/±15%. All three context
 channels receive the same transform. Vertical flips and large rotations are not
-used because they never occur in this data.
+used because they distort the anatomy further.
 
 ## Usage
 
@@ -234,15 +240,20 @@ and pairs ConvNeXt with the CNN baseline by fold and seed.
 A training run writes `config.json`, `history.csv` (per-epoch losses, metrics,
 time and peak GPU memory), `learning_curves.png`,
 `final.pt`, per-slice and per-scan predictions, confidence plots and
-`metrics.json`. The test step prints one line per patient, for example
-(format only; values are placeholders):
+`metrics.json`. The test step prints one line per patient followed by the
+calibrated summary (actual summary lines from the primary model's test run,
+Slurm 659813):
 
 ```text
 patient       true    p(AD)  decision
-002_S_0000    NC      0.081  NC
-002_S_0001    AD      0.552  REFER
+<patient_1>   NC      0.081  NC
+<patient_2>   AD      0.552  REFER
 ...
+Platt slope 0.246, intercept 0.193; referral threshold 0.6255970686222304 (fitted on calibration patients, target accuracy 0.9).
+Referred to a specialist: 17/136 patients.
 test slice: accuracy=0.8667 AUROC=0.9429123028256317 (n=6120)
+test scan: accuracy=0.8889 AUROC=0.9636215962039927 (n=306)
+test patient: accuracy=0.8824 AUROC=0.9439229249011858 (n=136)
 ```
 
 and saves `test_examples.png` (input slice, true label, p(AD), decision).
@@ -256,7 +267,41 @@ scan IDs removed).
 
 ## Results
 
-### Five-fold comparison (development patients)
+### Earlier development screens (fold 1)
+
+Development results before the current recipe (from `metrics.json`; full table
+in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)), fold-1 outer validation, 95 patients:
+
+| Model | Augmentation | Slice accuracy | Scan accuracy | Slice AUROC |
+|---|---|---:|---:|---:|
+| SmallCNN | none | 0.809 | 0.834 | 0.882 |
+| ConvNeXt-Tiny | none | 0.634 | 0.668 | 0.693 |
+| ConvNeXt-Tiny | light | 0.726 | 0.768 | 0.801 |
+
+First run of the current recipe (`config/experiments_strong_aug.json`, two seeds,
+same 95 patients, checkpoint chosen on the 38-patient inner `early_stop`
+subset): ConvNeXt-Lite with three-slice context reached slice accuracy
+0.717 / 0.740 and scan accuracy 0.754 / 0.810; details in
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md). Slice accuracy is still below 0.80.
+
+Second fold-1 screen (`config/experiments_round2.json`, 80 epochs, mean ± sd
+over two seeds, same 95 patients):
+
+| Model | Slice accuracy | Scan accuracy | Patient accuracy | Slice AUROC |
+|---|---:|---:|---:|---:|
+| SmallCNN, three-slice context | 0.735 ± 0.008 | 0.791 ± 0.020 | 0.779 ± 0.030 | 0.841 ± 0.048 |
+| ConvNeXt-Lite, single slice | 0.714 ± 0.004 | 0.780 ± 0.010 | 0.753 ± 0.007 | 0.783 ± 0.004 |
+| ConvNeXt-Lite, three-slice context | 0.728 ± 0.019 | 0.780 ± 0.030 | 0.742 ± 0.022 | 0.799 ± 0.022 |
+| ConvNeXt-Tiny, three-slice context | 0.742 ± 0.001 | 0.799 ± 0.023 | 0.768 ± 0.030 | 0.812 ± 0.008 |
+
+The scratch ConvNeXt memorised the training slices within a few epochs
+(training accuracy 1.00) and optimizer/regularisation tweaks stayed within seed
+noise; augmentation was the only clear improvement. Because the 38-patient
+`early_stop` subset proved noisy as a checkpoint selector (scan AUROC 0.64-0.73
+vs 0.84-0.87 on outer validation), subsequent rounds merged `early_stop` into
+training and kept the final-epoch EMA weights.
+
+### Five-fold comparison from scratch (development patients)
 
 [`config/experiments_round3_cv.json`](config/experiments_round3_cv.json), Slurm
 jobs 649955 (ConvNeXt) and 649956 (CNN): both models use the identical pipeline
@@ -302,15 +347,115 @@ The final-epoch weights are used for every model.
 
 The metadata file names show that acquisition period and scanner are entangled
 with the diagnosis: all 417 development scans acquired 2011-2016 are AD, and
-all 547 NC scans were acquired 2017-2019 with accelerated sequences. AD scans
-acquired 2017-2019 are misclassified far more often (ConvNeXt scan error 0.67
+all 547 NC scans were acquired 2017-2021 with accelerated sequences. AD scans
+acquired 2017-2021 are misclassified far more often (ConvNeXt scan error 0.67
 vs 0.30 for earlier AD scans; CNN 0.84 vs 0.45). On the 633 scans acquired
-2017-2019, where both classes share the same period, scan AUROC falls from
+2017-2021, where both classes share the same period, scan AUROC falls from
 0.850 to 0.729 for ConvNeXt and from 0.839 to 0.654 for the CNN. A probe
 network recognises the scanner vendor from pixels almost perfectly (scan AUROC
 0.986 pooled over five folds, on NC scans of one period). Part of the development accuracy
 therefore reflects acquisition style rather than anatomy. Details, probe
 results and possible mitigations: [docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md).
+
+### Fold 4-5 screens and five-fold ImageNet initialisation
+
+Two attempts to weaken the acquisition shortcut were screened on folds 4 and 5
+(one seed each; details in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)).
+Validation accuracy slice / scan / patient, and scan AUROC on the 2017-2021
+validation scans:
+
+| Run | Fold 4 | Fold 5 | 2017-21 scan AUROC (f4, f5) |
+|---|---|---|---|
+| ConvNeXt-Tiny scratch, strong aug. (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 |
+| SmallCNN, strong aug. (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 |
+| ConvNeXt-Tiny scratch, scanner aug. | 0.738 / 0.763 / 0.729 | 0.720 / 0.774 / 0.789 | 0.779, 0.725 |
+| SmallCNN, scanner aug. | 0.758 / 0.828 / 0.823 | 0.756 / 0.764 / 0.768 | 0.752, 0.710 |
+| ConvNeXt-Tiny ImageNet-1k, strong aug. | 0.817 / 0.847 / 0.844 | 0.773 / 0.774 / 0.821 | 0.770, 0.740 |
+| ConvNeXt-Tiny ImageNet-1k, scanner aug. | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 |
+
+* ImageNet initialisation (cited weights, 40 epochs) gives the best overall
+  accuracy so far, but discrimination within 2017-2021 stays at the level of
+  the scratch model: the gain comes mostly from scans whose acquisition style
+  already identifies the class.
+* Scanner-style augmentation helps the CNN, is mixed for scratch ConvNeXt and
+  adds nothing to the pretrained model.
+* Five folds (round 6, [`config/experiments_round6_pretrained_cv.json`](config/experiments_round6_pretrained_cv.json),
+  Slurm 656072), same patients as the table above:
+
+| Model | Slice acc. | Scan acc. | Patient acc. | Scan AUROC | 2017-21 scan AUROC |
+|---|---:|---:|---:|---:|---:|
+| ConvNeXt-Tiny, ImageNet-1k init. | **0.798 ± 0.028** | **0.828 ± 0.039** | **0.840 ± 0.019** | 0.920 ± 0.014 | 0.778 ± 0.047 |
+| ConvNeXt-Tiny, scratch | 0.715 ± 0.028 | 0.748 ± 0.054 | 0.782 ± 0.032 | 0.847 ± 0.035 | 0.736 ± 0.048 |
+| SmallCNN | 0.690 ± 0.032 | 0.701 ± 0.054 | 0.750 ± 0.032 | 0.853 ± 0.072 | 0.606 ± 0.081 |
+
+  Paired by fold, the pretrained model is ahead of the scratch ConvNeXt by
+  +0.083 slice / +0.080 scan / +0.059 patient accuracy (paired t 14.3 / 6.4 /
+  3.4, 4 df) and of the CNN by +0.108 / +0.128 / +0.090 (paired t 6.1 / 3.9 /
+  7.1), plus +0.172 scan AUROC on 2017-2021 scans (t = 5.1). Within 2017-2021
+  its gain over the scratch model (+0.042 AUROC, t = 1.5) is not significant and
+  it still misses 63 of 86 AD scans acquired then. Details:
+  [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+
+**Why the folds differ.** Per-fold slice / scan / patient accuracy of the
+pretrained model, and the number of 2017-2021 AD scans in each validation fold:
+
+| Fold | Slice acc. | Scan acc. | Patient acc. | 2017-21 AD scans in fold (missed) |
+|---:|---:|---:|---:|---:|
+| 1 | 0.836 | 0.877 | 0.863 | 10 (7) |
+| 2 | 0.778 | 0.810 | 0.821 | 17 (15) |
+| 3 | 0.783 | 0.834 | 0.853 | 9 (5) |
+| 4 | 0.817 | 0.847 | 0.844 | 24 (14) |
+| 5 | 0.773 | 0.774 | 0.821 | 26 (22) |
+
+Fold-to-fold variance stems from (1) ~95 validation patients per fold ($\pm
+0.04$ sampling error) and (2) an uneven share of the hard 2017-2021 AD group (9
+to 26 scans per fold), whereas seed randomness on a fixed fold is small (slice
+sd 0.001 in round 2). Pooled out-of-fold metrics across all 476 development
+patients (`pooled_out_of_fold_round3_round6.json`) match the fold means:
+pretrained ConvNeXt-Tiny `0.798` slice / `0.830` scan / `0.840` patient accuracy,
+scratch ConvNeXt-Tiny `0.715 / 0.749 / 0.782`, and SmallCNN `0.691 / 0.701 /
+0.750`.
+
+### Grad-CAM (folds 4 and 5, validation)
+
+Share of the Grad-CAM mass outside the head on the middle slice of each
+validation scan (background is 0.72 of the slice, so a uniform map scores
+about 0.72): scratch ConvNeXt-Tiny 0.72-0.83, ImageNet-initialised
+ConvNeXt-Tiny 0.36-0.46, SmallCNN 0.22-0.31, with little difference between
+diagnosis/period groups. The scratch ConvNeXt's evidence is not localised to the
+head. Tables and caveats:
+[docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md#grad-cam-where-the-evidence-lies).
+
+Mean input (top) and mean Grad-CAM (bottom) per diagnosis and acquisition
+group, fold 5 validation scans:
+
+| ConvNeXt-Tiny, scratch | ConvNeXt-Tiny, ImageNet init. | SmallCNN |
+|---|---|---|
+| ![](figures/adni/gradcam_means_scratch_fold5.png) | ![](figures/adni/gradcam_means_pretrained_fold5.png) | ![](figures/adni/gradcam_means_cnn_fold5.png) |
+
+Individual scans for the ImageNet-initialised model (two most confident
+correct and two most confident wrong per group; input slice, then Grad-CAM):
+
+![Grad-CAM cases](figures/adni/gradcam_cases_pretrained_fold5.png)
+
+* **Scratch ConvNeXt-Tiny** (`gradcam_means_scratch_fold5.png`) scatters its
+  attribution across the black corners and frame borders (`0.72-0.83` of map
+  mass outside the head; only 1% of validation scans have more than half of the
+  map inside the skull), reflecting coarse $7 \times 8$ final-stage cells driven
+  by field-of-view boundary cues rather than brain morphology.
+* **ImageNet-1k–initialised ConvNeXt-Tiny** (`gradcam_means_pretrained_fold5.png`,
+  `gradcam_cases_pretrained_fold5.png`) concentrates attribution inside the
+  cranium for 82% / 72% of fold 4 / fold 5 scans (`0.36-0.46` outside-head
+  share), focusing on a central region spanning the lateral ventricle, corpus
+  callosum, deep gray/medial-temporal structures and brainstem–cerebellar
+  junction. However, both confident correct scans and confident errors in
+  `AD 2017-21` ($p(\text{AD}) = 0.00$) and `NC 2017-21` ($p(\text{AD}) = 0.86\text{--}0.96$)
+  attend to this same central parenchymal region, showing that spatial
+  localisation inside the brain does not stop the network from exploiting
+  parenchymal contrast/texture differences between acquisition periods.
+* **SmallCNN** (`gradcam_means_cnn_fold5.png`) keeps `98-99%` of scans' majority
+  attribution inside the head (`0.22-0.31` outside), tracing high-contrast
+  cortical and cerebellar boundaries rather than deep periventricular anatomy.
 
 ### Final test (136 patients, scored once)
 
@@ -337,9 +482,9 @@ Patient level, per class:
 | SmallCNN | 0.800 / 0.818 | 0.912 / 0.902 | 0.858 | [83 9; 8 36] |
 
 Scans by acquisition period (test: 122 AD scans 2011-2016; 27 AD and 157 NC
-scans 2017-2019):
+scans 2017-2021):
 
-| Five-fold ensemble | 2011-16 scan acc. | 2017-19 scan acc. | 2017-19 scan AUROC | 2017-19 AD scans missed |
+| Five-fold ensemble | 2011-16 scan acc. | 2017-21 scan acc. | 2017-21 scan AUROC | 2017-21 AD scans missed |
 |---|---:|---:|---:|---:|
 | ConvNeXt-Tiny, ImageNet-1k init. | 0.951 | 0.848 | 0.878 | 14/27 |
 | ConvNeXt-Tiny, scratch | 0.893 | 0.766 | 0.777 | 9/27 |
@@ -352,7 +497,7 @@ scans 2017-2019):
   its ensemble reaches 0.783 slice accuracy and misses 20 of 44 AD patients,
   so most of its gain comes from the calibration intercept moving the
   decision boundary.
-* On 2017-2019 scans, where both classes share the acquisition period, the
+* On 2017-2021 scans, where both classes share the acquisition period, the
   pretrained model still misses about half of the AD scans (14 of 27).
 
 ![Per-fold validation accuracy of the single fold models and test accuracy of the fold ensembles](figures/fold_accuracy.png)
@@ -382,98 +527,6 @@ than the scratch ConvNeXt. The development comparison (five folds, 476
 patients) is the stronger evidence for the pretrained model's advantage over
 the CNN.
 
-### Fold 4-5 screens: scanner augmentation and ImageNet initialisation
-
-Two attempts to weaken the acquisition shortcut were screened on folds 4 and 5
-(one seed each; details in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)).
-Validation accuracy slice / scan / patient, and scan AUROC on the 2017-2019
-validation scans:
-
-| Run | Fold 4 | Fold 5 | 2017-19 scan AUROC (f4, f5) |
-|---|---|---|---|
-| ConvNeXt-Tiny scratch, strong aug. (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 |
-| SmallCNN, strong aug. (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 |
-| ConvNeXt-Tiny scratch, scanner aug. | 0.738 / 0.763 / 0.729 | 0.720 / 0.774 / 0.789 | 0.779, 0.725 |
-| SmallCNN, scanner aug. | 0.758 / 0.828 / 0.823 | 0.756 / 0.764 / 0.768 | 0.752, 0.710 |
-| ConvNeXt-Tiny ImageNet-1k, strong aug. | 0.817 / 0.847 / 0.844 | 0.773 / 0.774 / 0.821 | 0.770, 0.740 |
-| ConvNeXt-Tiny ImageNet-1k, scanner aug. | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 |
-
-* ImageNet initialisation (cited weights, 40 epochs) gives the best overall
-  accuracy so far, but discrimination within 2017-2019 stays at the level of
-  the scratch model: the gain comes mostly from scans whose acquisition style
-  already identifies the class.
-* Scanner-style augmentation helps the CNN, is mixed for scratch ConvNeXt and
-  adds nothing to the pretrained model.
-* Five folds (round 6, [`config/experiments_round6_pretrained_cv.json`](config/experiments_round6_pretrained_cv.json),
-  Slurm 656072), same patients as the table above:
-
-| Model | Slice acc. | Scan acc. | Patient acc. | Scan AUROC | 2017-19 scan AUROC |
-|---|---:|---:|---:|---:|---:|
-| ConvNeXt-Tiny, ImageNet-1k init. | **0.798 ± 0.028** | **0.828 ± 0.039** | **0.840 ± 0.019** | 0.920 ± 0.014 | 0.778 ± 0.047 |
-| ConvNeXt-Tiny, scratch | 0.715 ± 0.028 | 0.748 ± 0.054 | 0.782 ± 0.032 | 0.847 ± 0.035 | 0.736 ± 0.048 |
-| SmallCNN | 0.690 ± 0.032 | 0.701 ± 0.054 | 0.750 ± 0.032 | 0.853 ± 0.072 | 0.606 ± 0.081 |
-
-  Paired by fold, the pretrained model is ahead of the scratch ConvNeXt by
-  +0.083 slice / +0.080 scan / +0.059 patient accuracy (paired t 14.3 / 6.4 /
-  3.4, 4 df) and of the CNN by +0.108 / +0.128 / +0.090. Within 2017-2019 its
-  gain over the scratch model (+0.042 AUROC, t = 1.5) is not significant and it
-  still misses 63 of 86 AD scans acquired then. Details: [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
-
-### Grad-CAM (folds 4 and 5, validation)
-
-Share of the Grad-CAM mass outside the head on the middle slice of each
-validation scan (background is 0.72 of the slice, so a uniform map scores
-about 0.72): scratch ConvNeXt-Tiny 0.72-0.83, ImageNet-initialised
-ConvNeXt-Tiny 0.36-0.46, SmallCNN 0.22-0.31, with little difference between
-diagnosis/period groups. The scratch ConvNeXt's evidence is not localised to the
-head. Tables and caveats:
-[docs/ACQUISITION_CONFOUND.md](docs/ACQUISITION_CONFOUND.md#grad-cam-where-the-evidence-lies).
-
-Mean input (top) and mean Grad-CAM (bottom) per diagnosis and acquisition
-group, fold 5 validation scans:
-
-| ConvNeXt-Tiny, scratch | ConvNeXt-Tiny, ImageNet init. | SmallCNN |
-|---|---|---|
-| ![](figures/adni/gradcam_means_scratch_fold5.png) | ![](figures/adni/gradcam_means_pretrained_fold5.png) | ![](figures/adni/gradcam_means_cnn_fold5.png) |
-
-Individual scans for the ImageNet-initialised model (two most confident
-correct and two most confident wrong per group; input slice, then Grad-CAM):
-
-![Grad-CAM cases](figures/adni/gradcam_cases_pretrained_fold5.png)
-
-`TODO(owner)`: interpretation.
-
-### Earlier development screens (fold 1)
-
-Development results before the current recipe (from `metrics.json`; full table
-in [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)), fold-1 outer validation, 95 patients:
-
-| Model | Augmentation | Slice accuracy | Scan accuracy | Slice AUROC |
-|---|---|---:|---:|---:|
-| SmallCNN | none | 0.809 | 0.834 | 0.882 |
-| ConvNeXt-Tiny | none | 0.634 | 0.668 | 0.693 |
-| ConvNeXt-Tiny | light | 0.726 | 0.768 | 0.801 |
-
-First run of the current recipe (`config/experiments_strong_aug.json`, two seeds,
-same 95 patients): ConvNeXt-Lite with three-slice context reached slice accuracy
-0.717 / 0.740 and scan accuracy 0.754 / 0.810; details in
-[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md). Slice accuracy is still below 0.80.
-
-Second fold-1 screen (`config/experiments_round2.json`, 80 epochs, mean ± sd
-over two seeds, same 95 patients):
-
-| Model | Slice accuracy | Scan accuracy | Patient accuracy | Slice AUROC |
-|---|---:|---:|---:|---:|
-| SmallCNN, three-slice context | 0.735 ± 0.008 | 0.791 ± 0.020 | 0.779 ± 0.030 | 0.841 ± 0.048 |
-| ConvNeXt-Lite, single slice | 0.714 ± 0.004 | 0.780 ± 0.010 | 0.753 ± 0.007 | 0.783 ± 0.004 |
-| ConvNeXt-Lite, three-slice context | 0.728 ± 0.019 | 0.780 ± 0.030 | 0.742 ± 0.022 | 0.799 ± 0.022 |
-| ConvNeXt-Tiny, three-slice context | 0.742 ± 0.001 | 0.799 ± 0.023 | 0.768 ± 0.030 | 0.812 ± 0.008 |
-
-The scratch ConvNeXt memorised the training slices within a few epochs
-(training accuracy 1.00) and optimizer/regularisation tweaks stayed within seed
-noise; augmentation was the only clear improvement. This motivated the
-stronger augmentation, slice context and EMA now used by default.
-
 ## Resource profiling
 
 Development measurements (A100, FP32, batch 32, 224x224 single-slice input,
@@ -485,16 +538,22 @@ warm-up runs, excluding data loading):
 | SmallCNN | 97,521 | 594 MiB | 328 s | 1.02 ± 0.02 ms | 3.90 ± 0.13 ms |
 | ConvNeXt-Tiny | 27,817,825 | 3,756 MiB | 1,629 s | 4.70 ± 0.14 ms | 53.56 ± 0.16 ms |
 
-Five-fold runs (A100-PCIE-40GB, FP32, batch 32, 240x256 three-slice input,
-80 epochs on 16,420-17,100 training slices per fold; latency of fold 1's model):
+Five-fold runs (A100-PCIE-40GB, FP32, batch 32, 240x256 three-slice input on
+16,420-17,100 training slices per fold; latency of fold 1's model):
 
 | Model | Parameters | Peak training memory | Training time per fold | Latency batch 1 | Latency batch 64 |
 |---|---:|---:|---:|---:|---:|
-| SmallCNN | 97,809 | 727 MiB | 3,078 s (3,024-3,143) | 1.16 ± 0.01 ms | 4.83 ± 0.42 ms |
-| ConvNeXt-Tiny | 27,820,897 | 4,656 MiB | 6,038 s (5,897-6,138) | 5.19 ± 0.04 ms | 64.37 ± 0.17 ms |
+| SmallCNN (80 epochs) | 97,809 | 727 MiB | 3,078 s (3,024-3,143) | 1.16 ± 0.01 ms | 4.83 ± 0.42 ms |
+| ConvNeXt-Tiny, scratch (80 epochs) | 27,820,897 | 4,656 MiB | 6,038 s (5,897-6,138) | 5.19 ± 0.04 ms | 64.37 ± 0.17 ms |
+| ConvNeXt-Tiny, ImageNet-1k (40 epochs) | 27,820,897 | 4,677 MiB | ~3,000 s (~75 s/epoch) | 5.37 ± 0.05 ms | 64.29 ± 0.23 ms |
 
-ConvNeXt-Tiny has about 280 times the parameters, 6.4 times the training memory
-and twice the training time of the CNN for a non-significant accuracy gain.
+ConvNeXt-Tiny has about 284 times the parameters, 6.4 times the training memory
+and 4.6 times the single-slice latency of SmallCNN. Trained from scratch (80
+epochs), that extra cost yields a non-significant accuracy gain; initialised
+from ImageNet-1k (40 epochs), its per-fold training time matches 80-epoch
+SmallCNN (~50 min/fold), and the five-fold ensemble scores a 20-slice scan in
+~0.54 s on one A100 while delivering a significant +0.090 patient-accuracy and
++0.172 shared-period scan-AUROC gain across the five development folds.
 
 ## Calibration and referral
 
@@ -524,7 +583,7 @@ afterwards from the saved test logits with the same function
 Referral rule (tau fitted on the 68 calibration patients for 90% accuracy of
 automated patients, applied unchanged to the 136 test patients):
 
-| Five-fold ensemble | tau | Calibration coverage | Test coverage | Test accuracy of automated patients | Test patients referred | AD 2017-19 patients automated as NC |
+| Five-fold ensemble | tau | Calibration coverage | Test coverage | Test accuracy of automated patients | Test patients referred | AD 2017-21 patients automated as NC |
 |---|---:|---:|---:|---:|---:|---:|
 | ConvNeXt-Tiny, ImageNet-1k init. | 0.626 | 0.941 | 0.875 | 0.924 | 17 | 5 |
 | ConvNeXt-Tiny, scratch | 0.836 | 0.397 | 0.346 | 0.915 | 89 | 0 |
@@ -537,7 +596,7 @@ automated patients, applied unchanged to the 136 test patients):
   already better calibrated; for the CNN, scaling fitted on slices makes
   patient and scan ECE worse.
 * The scratch ConvNeXt needs a high threshold and refers 89 of 136 patients.
-* For both deployable ensembles, 5 AD patients scanned 2017-2019 are still
+* For both deployable ensembles, 5 AD patients scanned 2017-2021 are still
   automated as NC: confident misses on the confounded group.
 
 ![Left: slice reliability after Platt scaling. Middle and right: patient confidence of correct and wrong test predictions with the frozen tau](figures/test_calibration.png)
@@ -559,7 +618,7 @@ area under the risk-coverage curve (lower is better):
   at low confidence and fall below tau. Its AURC is lower than the CNN's in
   93% of bootstrap resamples (difference -0.015, 95% CI [-0.037, +0.004]).
 * The exception is the confounded group: 7 of the 16 AD patients scanned
-  2017-2019 are missed, with p(AD) 0.09-0.45, and 5 of them are confident
+  2017-2021 are missed, with p(AD) 0.09-0.45, and 5 of them are confident
   enough to be automated as NC (CNN: 6 missed, 5 automated).
 
 Single-model forward latency recorded by the test job (A100, FP32; the
@@ -571,19 +630,137 @@ ensemble runs five such passes): ConvNeXt-Tiny 5.37 ± 0.05 ms (batch 1) and
 The five most confident slice-level errors of the primary ensemble on the
 test set, as exported by `predict.py` (one slice per patient; titles give the
 slice probability and the patient-level probability and decision; IDs removed).
-All five come from scans acquired 2017-2019. The three false-positive slices
+All five come from scans acquired 2017-2021. The three false-positive slices
 belong to NC patients that are also automated as AD at patient level; the two
 false-negative slices belong to AD patients automated as NC, i.e. to the
-confident misses in the AD 2017-2019 group described above.
+confident misses in the AD 2017-2021 group described above.
 
 ![Most confident test failures](figures/adni/test_failures.png)
 
-`TODO(owner)`: 3-5 failure autopsies (these cases and/or the referred
-borderline cases in the test examples above), with their interpretation.
+Cross-model comparison of the five most confident slice-level errors (Cases 1-5,
+`test_failures.png`) and the four borderline referred patients (Cases 6-9,
+bottom row of `test_examples.png`), from `test_failure_cases.csv` and
+`test_patient_predictions.csv` (all nine patients were scanned in 2017-2021;
+thresholds: pretrained $\tau = 0.626$, scratch $\tau = 0.836$, SmallCNN
+$\tau = 0.563$):
+
+| Case | True | Scans | Slice $p(\text{AD})$ (pretrained) | Pretrained: patient $p(\text{AD})$, decision | Scratch: patient $p(\text{AD})$, decision | SmallCNN: patient $p(\text{AD})$, decision |
+|---|---|---:|---:|---|---|---|
+| 1 | NC | 1 | 0.971 | 0.84, AD (wrong) | 0.87, AD (wrong) | 0.54, REFER |
+| 2 | AD | 3 | 0.040 | 0.31, NC (wrong) | 0.25, REFER | 0.29, NC (wrong) |
+| 3 | NC | 2 | 0.961 | 0.63, AD (wrong) | 0.69, REFER | 0.68, AD (wrong) |
+| 4 | AD | 1 | 0.047 | 0.09, NC (wrong) | 0.35, REFER | 0.10, NC (wrong) |
+| 5 | NC | 1 | 0.953 | 0.87, AD (wrong) | 0.83, REFER | 0.77, AD (wrong) |
+| 6 (Ex. 5) | AD | 1 | — | 0.50, REFER | 0.54, REFER | 0.53, REFER |
+| 7 (Ex. 6) | AD | 1 | — | 0.51, REFER | 0.64, REFER | 0.46, REFER |
+| 8 (Ex. 7) | NC | 2 | — | 0.49, REFER | 0.61, REFER | 0.27, NC (correct) |
+| 9 (Ex. 8) | NC | 1 | — | 0.53, REFER | 0.51, REFER | 0.51, REFER |
+
+* **Cases 1 and 5 — Age-related ventricular enlargement in 2017-2021 NC patients
+  (confident false positives).** Both are single-scan NC subjects whose
+  mid-sagittal slices show marked lateral-ventricle dilatation, thinned corpus
+  callosum and widened parieto-occipital sulci that mimic AD atrophy. Even
+  though their 2017-2021 acquisition period biases the model toward NC, the
+  structural atrophy cue dominates: the primary ensemble assigns slice
+  $p(\text{AD}) = 0.971$ and $0.953$ and patient $p(\text{AD}) = 0.84$ and
+  $0.87$, automating both as AD. SmallCNN refers Case 1 ($p(\text{AD}) = 0.54 <
+  0.563$) but also automates Case 5 as AD ($p(\text{AD}) = 0.77$).
+* **Case 3 — Multi-scan borderline false positive on a 2017-2021 NC patient.**
+  A single sagittal slice with widened sulci and periventricular hypointensity
+  scores $p(\text{AD}) = 0.961$, but averaging across all 40 slices of the
+  patient's two scans pulls the patient probability down to $p(\text{AD}) =
+  0.630$—just $0.004$ above $\tau = 0.626$, so the referral rule narrowly misses
+  catching it.
+* **Cases 2 and 4 — Confounded 2017-2021 AD patients with mild midline atrophy
+  (confident false negatives).** Both are true AD patients scanned in 2017-2021
+  whose mid-sagittal slices preserve a relatively narrow lateral ventricle and
+  intact cortical ribbon while carrying the high-contrast accelerated-MPRAGE
+  appearance shared by 100% of training NC scans. With acquisition style and
+  subtle midline morphology both pointing to NC, the primary ensemble assigns
+  slice $p(\text{AD}) = 0.040$ and $0.047$ and patient $p(\text{AD}) = 0.31$ (3
+  scans, confidence $0.69 > 0.626$) and $0.09$ (1 scan, confidence $0.91 >
+  0.626$), automating both as NC. SmallCNN makes the exact same automated
+  errors ($p(\text{AD}) = 0.29$ and $0.10$). These two cases illustrate the
+  primary clinical hazard on this dataset: 5 of the 16 `AD 2017-2021` test
+  patients are confidently automated as NC.
+* **Cases 6-9 (Examples 5-8) — Borderline 2017-2021 patients caught by the
+  referral rule.** When moderate structural atrophy or degraded scan contrast
+  (e.g. Case 7 / Example 6) competes with the 2017-2021 acquisition prior,
+  calibrated patient probabilities cluster near $0.49\text{--}0.53$ (confidence
+  $0.50\text{--}0.53 < \tau = 0.626$), and all three ensembles route these
+  ambiguous patients to a specialist.
 
 ## Recommendation to the project manager
 
-`TODO(owner)`.
+1. **Decision: Advance to a controlled shadow study with conditions — do not
+   deploy for autonomous clinical triage yet.** On held-out test patients the
+   primary pipeline meets every internal benchmark (slice / scan / patient
+   accuracy **0.867 / 0.889 / 0.882**, AUROC **0.943 / 0.964 / 0.944**, and
+   **92.4%** accuracy on the **87.5%** of patients automated at $\tau = 0.626$),
+   but the dataset's acquisition-period confound causes systematic false
+   negatives on 2017-2021 AD scans (`14/27` scans missed, `5/16` patients
+   confidently automated as NC).
+2. **Recommended operating configuration.** Use the five-fold **ImageNet-1k–
+   initialised ConvNeXt-Tiny ensemble** with three-slice context, Platt scaling
+   ($a = 0.246, b = 0.193$) and the frozen referral threshold $\tau = 0.626$
+   (`REFER` when $\max(p, 1-p) < 0.626$). On the 136-patient test cohort this
+   automates 119 patients (92.4% accuracy, 9 errors) and refers 17 uncertain
+   patients (12.5% specialist referral load, removing 7 of the 16 unreferred
+   patient errors).
+3. **Is ConvNeXt worth its compute overhead over SmallCNN?**
+   * *From scratch:* **No.** Scratch ConvNeXt-Tiny requires $280\times$ the
+     parameters (`27.8 M` vs `97.8 k`), $6.4\times$ the training memory
+     (`4,656 MiB` vs `727 MiB`) and $4.5\times$ the single-slice latency
+     (`5.19 ms` vs `1.16 ms`), yet overfits background pixels (Grad-CAM
+     outside-head share `0.72-0.83`), trails the calibrated SmallCNN ensemble on
+     test (`0.801` vs `0.875` patient accuracy, McNemar $p = 0.041$), and must
+     refer 65.4% of test patients to maintain 90% accuracy.
+   * *With ImageNet-1k initialisation:* **Yes, for offline or hospital-server
+     batch triage.** Across the five paired development folds (476 patients),
+     pretrained ConvNeXt-Tiny outperforms SmallCNN by **+0.108** slice ($t =
+     6.1$), **+0.128** scan ($t = 3.9$) and **+0.090** patient accuracy ($t =
+     7.1$), and by **+0.172** scan AUROC on the unconfounded 2017-2021 period
+     ($0.778$ vs $0.606$, $t = 5.1$). On test it achieves better patient-level
+     calibration (`ECE 0.049` vs `0.112`, as slice Platt scaling degrades
+     SmallCNN's patient ECE), stronger error ranking (`confidence AUROC 0.838`
+     vs `0.783`), and lower selective risk (`AURC 0.030` vs `0.044`). Five-fold
+     ensemble inference takes $\approx 27\text{ ms}$ per slice ($\approx
+     0.54\text{ s}$ per 20-slice scan) on one A100 GPU, which is negligible
+     relative to MRI acquisition time.
+4. **Conditions before clinical or multi-site progression.**
+   * **External protocol-matched validation:** Re-evaluate on an independent
+     cohort where AD and NC patients are balanced within each scanner vendor,
+     field strength and acquisition era, verifying that subgroup sensitivity on
+     modern accelerated sequences is $\ge 0.85$.
+   * **Subgroup-aware calibration and referral:** Fit Platt scaling at the
+     patient/scan level (or conditioning on sequence family) and enforce
+     mandatory `REFER` whenever a scan comes from an underrepresented
+     protocol-by-diagnosis cell.
+   * **Anatomically constrained pooling:** Replace full-frame global average
+     pooling with skull-masked pooling and 3D/multi-slab coronal+sagittal views
+     so mild medial-temporal atrophy in 2017-2021 AD scans is not washed out by
+     whole-slice acquisition contrast.
+
+## Limitations and future work
+
+* **Acquisition confound:** No NC scans were acquired before 2017 in the
+  supplied course dataset; overall accuracy is therefore an upper bound for a
+  clinical site where AD and NC share the same scanner and protocol.
+* **Small validation folds:** Each development fold has ~95 validation patients
+  ($\pm 0.04$ binomial standard error), and multi-seed repeats were run only on
+  fold 1.
+* **2D slice representation and coarse Grad-CAM grid:** Slices are not
+  spatially registered across patients, and the final ConvNeXt stage has a $7
+  \times 8$ spatial grid.
+* **Horizontal flip orientation:** The horizontal flip mirrors sagittal slices
+  front-to-back, an orientation absent from natural brain MRI; its standalone
+  effect was not ablated separately from the rest of the strong augmentation
+  profile.
+* **Future extensions:** Skull-masked global pooling (restricting feature
+  aggregation to intracranial pixels), background randomisation during training,
+  within-mask intensity normalisation (CLAHE or z-score), folds stratified
+  jointly by diagnosis and acquisition period, higher-resolution Grad-CAM from
+  stage 3, and external validation on protocol-matched multi-site data.
 
 ## Artificial Intelligence Usage Disclosure
 
