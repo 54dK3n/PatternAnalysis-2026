@@ -157,35 +157,34 @@ Anatomical and spatial interpretation of the maps (`gradcam_group_means.png` and
 
 * **Scratch ConvNeXt-Tiny (`gradcam_means_scratch_fold5.png`)**: Across all three
   cohort groups (`AD 2011-16`, `AD 2017-21`, `NC 2017-21`), the mean heatmaps
-  exhibit a coarse $7 \times 8$ checkerboard/border pattern concentrated along the
+  exhibit a coarse 7×8 checkerboard/border pattern concentrated along the
   top, bottom-left and bottom-right black background margins (`0.716-0.830` of
   attribution mass outside the skull, with only 1% of validation scans placing
-  more than half of their attribution inside the head). Training a 27.8M-parameter
-  network from scratch on 381 patients allows global field-of-view border
-  artifacts and background padding statistics carried by large $7 \times 7$
-  depthwise receptive fields to dominate the final-stage features rather than
-  focal brain anatomy.
+  more than half of their attribution inside the head). While outside-head
+  attribution alone does not explain lower accuracy (SmallCNN places `98-99%` of
+  scans' majority attribution inside the head yet scores similarly to or below
+  scratch ConvNeXt in single-fold development), it shows that training a
+  27.8M-parameter network from scratch on 381 patients allows global
+  field-of-view border artifacts and background padding statistics carried by
+  large 7×7 depthwise receptive fields to dominate the final-stage features.
 * **ImageNet-1k–initialised ConvNeXt-Tiny (`gradcam_means_pretrained_fold5.png`,
   `gradcam_cases_pretrained_fold5.png`)**: Pretrained initialisation pulls the
   attribution into the intracranial vault for 82% (fold 4) and 72% (fold 5) of
-  validation scans (`0.357-0.464` outside-head mass). On these mid-sagittal
-  slices, the group-mean and individual-case maps form a single central hotspot
-  covering the medial temporal/periventricular region, corpus callosum, lateral
-  ventricle body, and brainstem–cerebellar junction—structures where ventricular
-  enlargement and callosal/medial-temporal atrophy are visible in AD. However,
-  in `gradcam_cases_pretrained_fold5.png`, confident false negatives in `AD
-  2017-21` (scan $p(\text{AD}) = 0.00$) and confident false positives in `NC
-  2017-21` (scan $p(\text{AD}) = 0.86\text{--}0.96$) highlight the same central
-  parenchymal and ventricular region as correct predictions. Attending to brain
-  tissue is therefore necessary to avoid background overfitting, but it does not
-  prevent the classifier from reading whole-brain contrast and noise texture
-  associated with the 2017-2021 accelerated acquisition protocol.
+  validation scans (`0.357-0.464` outside-head mass). On these unregistered
+  mid-sagittal slices at 7×8 final-stage resolution, the group-mean and
+  individual-case maps form a broad central intracranial region (roughly
+  overlapping the mid-sagittal ventricular/callosal and deep parenchymal zone).
+  However, in `gradcam_cases_pretrained_fold5.png`, confident false negatives in
+  `AD 2017-21` (scan p(AD) = 0.00) and confident false positives in `NC 2017-21`
+  (scan p(AD) = 0.86–0.96) highlight this same central brain region as correct
+  predictions. Paired with the `vendor_within_nc` probe (`0.986` scan AUROC),
+  this is consistent with the classifier reading global intracranial contrast
+  and protocol signatures alongside gross ventricular morphology.
 * **SmallCNN (`gradcam_means_cnn_fold5.png`)**: SmallCNN confines `98-99%` of
-  scans' majority attribution inside the head (`0.222-0.308` outside), but its
-  smaller receptive field distributes weight along high-contrast tissue
+  scans' majority attribution inside the head (`0.222-0.308` outside), with its
+  smaller receptive field distributing weight along high-contrast tissue
   boundaries—the superior frontoparietal cortical rim, occipital/cerebellar
-  contour and brainstem edge—rather than concentrating on deep periventricular
-  structures.
+  contour and brainstem edge.
 
 ## Consequences
 
