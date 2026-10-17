@@ -16,7 +16,9 @@ htmlcov/
 !.env.example
 
 # Course data and generated patient-level manifests stay outside Git.
-ADNI/
+/ADNI/
+!figures/adni/
+!figures/adni/*.png
 AD_NC/
 data/
 datasets/
@@ -43,7 +45,6 @@ wandb/
 # The supplied coursework brief is reference material, not project source.
 COMP3710_Report_2026_draft_v2.pdf
 
-# Local audit notes, batch-job logs, and migration backups.
-AI_USAGE_LOG.md
+# Batch-job logs.
 *.out
 slurm-*.out

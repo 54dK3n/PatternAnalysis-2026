@@ -142,14 +142,14 @@ patients (95-96), so the five folds cover all 476 development patients.
   patient accuracy near 0.78 has a binomial standard error of about 0.04.
 * Most of the fold-to-fold spread and most errors trace back to the
   acquisition confound described in [ACQUISITION_CONFOUND.md](ACQUISITION_CONFOUND.md):
-  AD scans acquired 2017-2019 (the same period as all NC scans) are missed far
-  more often, and scan AUROC on the 2017-2019 subset is 0.729 (ConvNeXt) and
+  AD scans acquired 2017-2021 (the same period as all NC scans) are missed far
+  more often, and scan AUROC on the 2017-2021 subset is 0.729 (ConvNeXt) and
   0.654 (CNN) instead of 0.850 and 0.839.
 
 ## Rounds 4 and 5: scanner-style augmentation and ImageNet initialisation (folds 4 and 5)
 
 Two attempts to weaken the acquisition shortcut, screened on folds 4 and 5
-(fold 5 was the weakest fold and has the most 2017-2019 AD validation scans).
+(fold 5 was the weakest fold and has the most 2017-2021 AD validation scans).
 All runs keep the round-3 pipeline (three-slice context, EMA 0.999,
 final-epoch weights) and differ only as listed; every checkpoint replayed
 exactly.
@@ -163,10 +163,10 @@ exactly.
   weights (Liu et al. 2022; SHA-256 in the README), 40 epochs, learning rate
   5e-5, with the strong or the scanner profile.
 
-Validation accuracy (slice / scan / patient) and the 2017-2019 subset (scan
-AUROC, AD scans acquired 2017-2019 that were called NC):
+Validation accuracy (slice / scan / patient) and the 2017-2021 subset (scan
+AUROC, AD scans acquired 2017-2021 that were called NC):
 
-| Run | Fold 4 | Fold 5 | 2017-19 scan AUROC (f4, f5) | 2017-19 AD missed (f4, f5) |
+| Run | Fold 4 | Fold 5 | 2017-21 scan AUROC (f4, f5) | 2017-21 AD missed (f4, f5) |
 |---|---|---|---|---|
 | Tiny scratch, strong (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 | 10/24, 24/26 |
 | CNN, strong (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 | 22/24, 16/26 |
@@ -175,20 +175,20 @@ AUROC, AD scans acquired 2017-2019 that were called NC):
 | Tiny ImageNet, strong | **0.817 / 0.847 / 0.844** | 0.773 / 0.774 / 0.821 | 0.770, 0.740 | 14/24, 22/26 |
 | Tiny ImageNet, scanner | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 | 16/24, 20/26 |
 
-(2017-2019 validation scans: 135 with 24 AD on fold 4, 131 with 26 AD on fold 5.)
+(2017-2021 validation scans: 135 with 24 AD on fold 4, 131 with 26 AD on fold 5.)
 
 * ImageNet initialisation gives the highest overall accuracy seen so far
   (fold 4: 0.817 / 0.847 / 0.844, above 0.80 at slice, scan and patient
   level; fold 5: slice 0.773) and the highest scan AUROC (0.900-0.920), in half
   the epochs. Training accuracy reaches 0.999-1.00.
-* It does **not** improve discrimination inside 2017-2019 beyond the scratch
-  model (AUROC 0.72-0.77 vs 0.70-0.82), and it still misses most 2017-2019 AD
+* It does **not** improve discrimination inside 2017-2021 beyond the scratch
+  model (AUROC 0.72-0.77 vs 0.70-0.82), and it still misses most 2017-2021 AD
   scans on fold 5. The gain is concentrated on scans whose acquisition style
   already identifies the class.
 * The scanner profile helps the CNN clearly on both folds (+0.025 / +0.092
-  slice accuracy, 2017-19 AUROC +0.03 / +0.15), gives mixed results for scratch
+  slice accuracy, 2017-21 AUROC +0.03 / +0.15), gives mixed results for scratch
   ConvNeXt (fold 4 worse, fold 5 better, and on fold 5 it finds 17 of 26
-  2017-2019 AD scans instead of 2) and no benefit for the pretrained model.
+  2017-2021 AD scans instead of 2) and no benefit for the pretrained model.
 * Two folds and one seed per configuration: differences of a few points are
   within the fold/seed noise measured in rounds 2 and 3. Rounds 4 and 5 are
   screens, not a model selection; round 6 runs the pretrained model on all
@@ -203,7 +203,7 @@ EMA 0.999, final-epoch weights, seed 3710) on all five folds, compared with
 round 3 on identical patients. All five checkpoints replayed exactly; folds 4
 and 5 reproduce the round-5 numbers exactly.
 
-| Fold | Slice acc. | Scan acc. | Patient acc. | Scan AUROC | Patient FP / FN | 2017-19 scan AUROC | 2017-19 AD missed |
+| Fold | Slice acc. | Scan acc. | Patient acc. | Scan AUROC | Patient FP / FN | 2017-21 scan AUROC | 2017-21 AD missed |
 |---:|---:|---:|---:|---:|---|---:|---:|
 | 1 | 0.836 | 0.877 | 0.863 | 0.937 | 7 / 6 | 0.741 | 7/10 |
 | 2 | 0.778 | 0.810 | 0.821 | 0.929 | 1 / 16 | 0.856 | 15/17 |
@@ -215,7 +215,7 @@ and 5 reproduce the round-5 numbers exactly.
 Paired over the five folds (mean difference, paired t with 4 degrees of
 freedom; 2.78 is the 5% two-sided critical value):
 
-| Comparison | Slice acc. | Scan acc. | Patient acc. | 2017-19 scan AUROC |
+| Comparison | Slice acc. | Scan acc. | Patient acc. | 2017-21 scan AUROC |
 |---|---|---|---|---|
 | pretrained - scratch ConvNeXt-Tiny | +0.083 (t = 14.3) | +0.080 (t = 6.4) | +0.059 (t = 3.4) | +0.042 (t = 1.5) |
 | pretrained - SmallCNN | +0.108 (t = 6.1) | +0.128 (t = 3.9) | +0.090 (t = 7.1) | +0.172 (t = 5.1) |
@@ -225,14 +225,14 @@ Out-of-fold scan error by acquisition group (all 1,050 development scans):
 | Group | Pretrained Tiny | Scratch Tiny | SmallCNN |
 |---|---:|---:|---:|
 | AD acquired 2011-2016 (417) | 0.173 | 0.300 | 0.451 |
-| AD acquired 2017-2019 (86) | 0.733 | 0.674 | 0.837 |
+| AD acquired 2017-2021 (86) | 0.733 | 0.674 | 0.837 |
 | NC (547) | 0.080 | 0.148 | 0.099 |
 
 * ImageNet initialisation is the first configuration that beats both models
   consistently on every fold at slice and scan level, with mean slice accuracy
   0.798 (3 of 5 folds >= 0.80) and patient accuracy 0.840 (all folds >= 0.82).
 * The gain is on scans that the acquisition style already separates (earlier
-  AD and NC errors roughly halve). On AD scans acquired 2017-2019 the error is
-  unchanged (0.73) and the 2017-19 AUROC gain over the scratch model is not
+  AD and NC errors roughly halve). On AD scans acquired 2017-2021 the error is
+  unchanged (0.73) and the 2017-21 AUROC gain over the scratch model is not
   significant. It does separate those scans better than the CNN.
 * Training accuracy reaches 1.00; one seed per fold.

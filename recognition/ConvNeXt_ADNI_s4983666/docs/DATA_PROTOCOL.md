@@ -7,7 +7,7 @@ of a patient stays in one partition.
 ## Dataset
 
 The course copy at `/home/groups/comp3710/ADNI` contains 680 patients, 1,526
-scans and 30,520 grayscale 256 x 240 JPEG slices (20 consecutive axial slices
+scans and 30,520 grayscale 256 x 240 JPEG slices (20 consecutive sagittal slices
 per scan). The filename prefix is the scan ID; the patient ID (`NNN_S_NNNN`) is
 read from the metadata's `raw` path. The course's own `AD_NC/train` and
 `AD_NC/test` folders share 216 patients (with different scans), so they are
@@ -77,5 +77,5 @@ does not establish generalisation to other hospitals or scanners.
 The patient split is stratified by diagnosis only. Acquisition period and
 sequence, which can be read from the metadata file names, are strongly
 associated with the diagnosis in this data (every NC scan was acquired
-2017-2019; every scan acquired 2011-2016 is AD); see
+2017-2021; every scan acquired 2011-2016 is AD); see
 [ACQUISITION_CONFOUND.md](ACQUISITION_CONFOUND.md).

@@ -2,12 +2,12 @@
 
 In this copy of ADNI the acquisition period is entangled with the label: every
 development scan acquired 2011-2016 is AD, and every NC scan was acquired
-2017-2019. A diagnosis model could therefore partly learn "older acquisition
+2017-2021. A diagnosis model could therefore partly learn "older acquisition
 style = AD". This probe trains the same network on a *non-diagnostic* target
 while holding the diagnosis fixed, using the same frozen folds:
 
-* ``era_within_ad``: AD scans only; target = acquired 2017-2019 (1) vs 2011-2016 (0).
-* ``vendor_within_nc``: NC scans only (all 2017-2019); target = GE IR-SPGR
+* ``era_within_ad``: AD scans only; target = acquired 2017-2021 (1) vs 2011-2016 (0).
+* ``vendor_within_nc``: NC scans only (all 2017-2021); target = GE IR-SPGR
   sequence (1) vs other (Siemens/Philips MPRAGE) sequences (0).
 
 The acquisition year and sequence name are read from the scan's ``raw`` path
