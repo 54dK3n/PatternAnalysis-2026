@@ -33,8 +33,8 @@ LayerNorm + 2×2 stride-2 convolutions. Each block applies a 7×7 depthwise
 convolution, LayerNorm, a 4×-expanded MLP with GELU, a learnable layer scale
 (initialized to 1e-6) and stochastic depth [2] on the residual branch. The model
 outputs one AD logit per slice. The baseline (`SmallCNN` in `models/cnn.py`) uses
-four sequential stages of `Conv2d(3×3, padding=1, bias=False) → GroupNorm(4 groups) → ReLU → MaxPool2d(2×2)`
-with channel widths `16 → 32 → 64 → 128`, followed by global average pooling,
+four sequential stages of `Conv2d(3x3, padding=1, bias=False) -> GroupNorm(4 groups) -> ReLU -> MaxPool2d(2x2)`
+with channel widths `16 -> 32 -> 64 -> 128`, followed by global average pooling,
 `Dropout(0.2)` and a `Linear(128, 1)` head (`97,809` trainable parameters for
 three-slice input). Training uses class-weighted binary
 cross-entropy, AdamW with warm-up and cosine decay, strong augmentation, and an
@@ -112,23 +112,23 @@ style does not predict the diagnosis before any deployment.
 
 ```text
 ConvNeXt_ADNI_s4983666/
-├── modules.py            # Model interface (PyTorch only): models/convnext.py, models/cnn.py
-├── dataset.py            # Data interface: dataset/ (splits, manifests, slices, augmentation)
-├── train.py              # Training entry point (engine/training.py)
-├── predict.py            # Inference, calibration and test entry point (engine/prediction.py)
-├── adni_splits.py        # Audit / prepare / verify the patient-level split
-├── audit_preprocessing.py
-├── probe_acquisition.py  # Acquisition-style probe (docs/ACQUISITION_CONFOUND.md)
-├── explain_gradcam.py    # Grad-CAM figures on validation patients
-├── engine/               # Training loop, EMA, LR schedule, prediction
-├── evaluation/           # Metrics, inference, calibration, reporting, resource profiling
-├── utils/                # Runtime/seeding, output files, plots, training controls
-├── slurm/                # Rangpur batch scripts and the experiment-plan runner
-├── config/               # Requirements and experiment plans
-├── docs/                 # Data protocol, preprocessing notes, development experiments
-├── figures/              # README figures (plots of saved results)
-│   └── adni/             # De-identified ADNI slices: test examples, failures, Grad-CAM
-└── tests/                # Unit and end-to-end tests on synthetic data
+|-- modules.py            # Model interface (PyTorch only): models/convnext.py, models/cnn.py
+|-- dataset.py            # Data interface: dataset/ (splits, manifests, slices, augmentation)
+|-- train.py              # Training entry point (engine/training.py)
+|-- predict.py            # Inference, calibration and test entry point (engine/prediction.py)
+|-- adni_splits.py        # Audit / prepare / verify the patient-level split
+|-- audit_preprocessing.py
+|-- probe_acquisition.py  # Acquisition-style probe (docs/ACQUISITION_CONFOUND.md)
+|-- explain_gradcam.py    # Grad-CAM figures on validation patients
+|-- engine/               # Training loop, EMA, LR schedule, prediction
+|-- evaluation/           # Metrics, inference, calibration, reporting, resource profiling
+|-- utils/                # Runtime/seeding, output files, plots, training controls
+|-- slurm/                # Rangpur batch scripts and the experiment-plan runner
+|-- config/               # Requirements and experiment plans
+|-- docs/                 # Data protocol, preprocessing notes, development experiments
+|-- figures/              # README figures (plots of saved results)
+|   '-- adni/             # De-identified ADNI slices: test examples, failures, Grad-CAM
+'-- tests/                # Unit and end-to-end tests on synthetic data
 ```
 
 ## Dependencies and reproducibility
@@ -208,26 +208,40 @@ used because they distort the anatomy further.
 
 ```bash
 SPLITS="$HOME/comp3710/adni_splits_v1"
-# Train (defaults: ConvNeXt-Lite, 3-slice context, strong augmentation, EMA 0.999,
-# AdamW 1e-4 / wd 0.05, 3 warm-up epochs + cosine, 80 epochs, final-epoch weights).
-python train.py --splits-dir "$SPLITS" --output runs/lite_fold1 --fold 1
-python train.py --splits-dir "$SPLITS" --output runs/cnn_fold1 --model cnn --lr 1e-3 --weight-decay 1e-4
+WEIGHTS="$HOME/comp3710/weights/convnext_tiny_1k_224_ema.pth"
 
-# Reproduce the validation result of a checkpoint.
-python predict.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --role val --output runs/lite_fold1_val
+# 1. Train the primary five-fold ImageNet-1k-initialised ConvNeXt-Tiny ensemble
+# (40 epochs, 3-slice context, strong augmentation, EMA 0.999, AdamW 1e-4 / wd 0.05).
+for f in 1 2 3 4 5; do
+    python train.py --splits-dir "$SPLITS" --output "runs/pt_cv/fold${f}" --fold "$f" \
+        --model convnext_tiny_in1k --pretrained-weights "$WEIGHTS" --epochs 40
+done
 
-# Final evaluation of the ONE chosen checkpoint (calibration first, then test once).
-python predict.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --role calibration \
-    --output runs/lite_fold1/final_calibration
-python predict.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --role test \
-    --calibration-file runs/lite_fold1/final_calibration/calibration.json --output runs/lite_fold1/final_test
+# 2. Train the five-fold scratch ConvNeXt-Tiny and SmallCNN baselines (80 epochs).
+for f in 1 2 3 4 5; do
+    python train.py --splits-dir "$SPLITS" --output "runs/scratch_cv/fold${f}" --fold "$f" \
+        --model convnext_tiny --epochs 80
+    python train.py --splits-dir "$SPLITS" --output "runs/cnn_cv/fold${f}" --fold "$f" \
+        --model cnn --lr 1e-3 --weight-decay 1e-4 --epochs 80
+done
 
-# Optional: the five fold models as one ensemble (mean logit; calibration/test only).
-python predict.py --checkpoint runs/cv/fold{1,2,3,4,5}/final.pt --splits-dir "$SPLITS" --role calibration \
-    --output runs/cv_ensemble/calibration
+# 3. Reproduce the validation result of any single fold checkpoint.
+python predict.py --checkpoint runs/pt_cv/fold1/final.pt --splits-dir "$SPLITS" \
+    --role val --output runs/pt_cv/fold1_val
 
-# Grad-CAM of a checkpoint on its fold's validation patients (never calibration/test).
-python explain_gradcam.py --checkpoint runs/lite_fold1/final.pt --splits-dir "$SPLITS" --output runs/lite_fold1/gradcam
+# 4. Final evaluation of the frozen five-fold ensemble (calibration first, then test once).
+python predict.py --checkpoint runs/pt_cv/fold{1,2,3,4,5}/final.pt --splits-dir "$SPLITS" \
+    --role calibration --output runs/pt_cv_ensemble/calibration
+python predict.py --checkpoint runs/pt_cv/fold{1,2,3,4,5}/final.pt --splits-dir "$SPLITS" \
+    --role test --calibration-file runs/pt_cv_ensemble/calibration/calibration.json \
+    --output runs/pt_cv_ensemble/test
+
+# 5. Grad-CAM of a checkpoint on its fold's validation patients (never calibration/test).
+python explain_gradcam.py --checkpoint runs/pt_cv/fold5/final.pt --splits-dir "$SPLITS" \
+    --output runs/pt_cv/fold5/gradcam
+
+# Note: omitting --model defaults to ConvNeXt-Lite (convnext_lite) for fast single-fold smoke runs:
+# python train.py --splits-dir "$SPLITS" --output runs/lite_fold1 --fold 1
 ```
 
 When the metadata file names carry acquisition dates, `predict.py` also reports
@@ -472,7 +486,7 @@ correct and two most confident wrong per group; input slice, then Grad-CAM):
 
 * **Scratch ConvNeXt-Tiny** (`gradcam_means_scratch_fold5.png`) scatters its
   attribution across the black corners and frame borders (`0.72-0.83` of map
-  mass outside the head; only 1% of validation scans have > 50% of the
+  mass outside the head; only 1% of validation scans have more than 50% of the
   map inside the skull), reflecting coarse 7×8 final-stage cells driven
   by field-of-view boundary cues rather than brain morphology. Note that
   outside-head attribution alone does not explain why a model scores lower
@@ -545,21 +559,25 @@ Scans by acquisition period (test: 122 AD scans 2011-2016 across 28 AD patients;
 * **Disentangling ensembling vs Platt calibration vs split composition:**
   1. *Five-fold ensembling + test split (before Platt scaling):* Averaging logits
      across the five fold checkpoints lifts uncalibrated slice accuracy above the
-     single-fold development means for all three architectures (`0.798 → 0.862`
-     pretrained ConvNeXt, `0.715 → 0.791` scratch ConvNeXt, `0.690 → 0.783`
-     SmallCNN). At this uncalibrated ensemble stage, pretrained ConvNeXt still
-     leads SmallCNN on test by **+0.079** slice (`0.862` vs `0.783`), **+0.065**
-     scan (`0.879` vs `0.814`), **+0.059** patient accuracy (`0.882` vs `0.824`)
-     and **+0.103** patient balanced accuracy (`0.854` vs `0.751`), because
-     uncalibrated SmallCNN misses 20 of the 44 AD test patients at the raw 0.5
-     threshold.
+     single-fold development means for all three architectures (`0.798 -> 0.862`
+     pretrained ConvNeXt, `0.715 -> 0.791` scratch ConvNeXt, `0.690 -> 0.783`
+     SmallCNN). Because `PREDECLARATION.txt` committed to scoring the test set
+     once per five-fold ensemble rather than evaluating individual fold
+     checkpoints on test, this jump reflects the combined effect of five-fold
+     logit ensembling and split-to-split variation between the 476 development
+     patients and 136 test patients. Crucially, at this uncalibrated ensemble
+     stage on the exact same 136 test patients, pretrained ConvNeXt still leads
+     SmallCNN by **+0.079** slice (`0.862` vs `0.783`), **+0.065** scan (`0.879`
+     vs `0.814`), **+0.059** patient accuracy (`0.882` vs `0.824`) and **+0.103**
+     patient balanced accuracy (`0.854` vs `0.751`), because uncalibrated SmallCNN
+     misses 20 of the 44 AD test patients at the raw 0.5 threshold.
   2. *Platt intercept calibration:* Fitting Platt scaling on the 68 calibration
      patients leaves pretrained ConvNeXt's test patient accuracy unchanged
-     (`0.882 → 0.882`, balanced accuracy `0.854 → 0.866`), whereas SmallCNN's
+     (`0.882 -> 0.882`, balanced accuracy `0.854 -> 0.866`), whereas SmallCNN's
      large positive intercept (`b = +0.813`) shifts its operating threshold down
      in raw logit space, recovering 12 of its 20 missed AD patients and jumping
-     its test patient accuracy by **+0.051** (`0.824 → 0.875`) and slice accuracy
-     by **+0.043** (`0.783 → 0.826`).
+     its test patient accuracy by **+0.051** (`0.824 -> 0.875`) and slice accuracy
+     by **+0.043** (`0.783 -> 0.826`).
 * **2017-2021 subgroup on test vs development:** Although pretrained ConvNeXt
   outperformed SmallCNN by +0.172 scan AUROC on 2017-2021 scans in single-fold
   development (`0.778` vs `0.606`), on the 184 test scans from 2017-2021 their
@@ -614,19 +632,20 @@ warm-up runs, excluding data loading):
 Five-fold runs and final test benchmark (A100-PCIE-40GB, FP32, batch 32, 240×256
 three-slice input on 16,420-17,100 training slices per fold):
 
-| Model | Parameters | Peak train VRAM | Peak eval / infer VRAM (batch 1 / 64) | Training time per fold | Latency batch 1 (dev / test) | Latency batch 64 (dev / test) |
-|---|---:|---:|---:|---:|---:|---:|
-| SmallCNN (80 epochs) | 97,809 | 727 MiB | 328 MiB / 73 / 591 MiB (test: 42 / 559 MiB) | 3,078 s (3,024-3,143) | 1.16 ± 0.01 / 1.14 ± 0.01 ms | 4.83 ± 0.42 / 4.74 ± 0.01 ms |
-| ConvNeXt-Tiny, scratch (80 epochs) | 27,820,897 | 4,656 MiB | 1,137 MiB / 415 / 1,433 MiB (test: 585 / 1,603 MiB) | 6,038 s (5,897-6,138) | 5.19 ± 0.04 / 5.27 ± 0.07 ms | 64.37 ± 0.17 / 64.30 ± 0.26 ms |
-| ConvNeXt-Tiny, ImageNet-1k (40 epochs) | 27,820,897 | 4,677 MiB | 1,160 MiB / 416 / 1,479 MiB (test: 586 / 1,649 MiB) | ~3,000 s (~75 s/epoch) | 4.93 ± 0.11 / 5.37 ± 0.05 ms | 64.28 ± 0.23 / 64.29 ± 0.23 ms |
+| Model | Parameters | Peak train VRAM | Peak eval VRAM (batch 32) | Peak infer VRAM (batch 1 / 64, dev; test) | Training time per fold | Latency batch 1 (dev / test) | Latency batch 64 (dev / test) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| SmallCNN (80 epochs) | 97,809 | 727 MiB | 328 MiB | 73 / 591 MiB; 42 / 559 MiB | 3,078 s (3,024-3,143) | 1.16 ± 0.01 / 1.14 ± 0.01 ms | 4.83 ± 0.42 / 4.74 ± 0.01 ms |
+| ConvNeXt-Tiny, scratch (80 epochs) | 27,820,897 | 4,656 MiB | 1,137 MiB | 415 / 1,433 MiB; 585 / 1,603 MiB | 6,038 s (5,897-6,138) | 5.19 ± 0.04 / 5.27 ± 0.07 ms | 64.37 ± 0.17 / 64.30 ± 0.26 ms |
+| ConvNeXt-Tiny, ImageNet-1k (40 epochs) | 27,820,897 | 4,677 MiB | 1,160 MiB | 416 / 1,479 MiB; 586 / 1,649 MiB | ~3,000 s (~75 s/epoch) | 4.93 ± 0.11 / 5.37 ± 0.05 ms | 64.28 ± 0.23 / 64.29 ± 0.23 ms |
 
 ConvNeXt-Tiny has 284× the parameters (`27,820,897 / 97,809`), 6.4× the peak
-training memory and 4.5×-4.7× the single-slice forward latency of SmallCNN (`5.19 / 1.16 ms`
-in fold-1 development; `5.37 / 1.14 ms` in the final test benchmark). Trained
-from scratch (80 epochs), that extra cost yields a non-significant accuracy
-gain; initialised from ImageNet-1k (40 epochs), its per-fold training time
-matches 80-epoch SmallCNN (~50 min/fold), and the five-fold ensemble scores a
-20-slice scan in ~0.54 s on one A100.
+training memory and 4.3×–4.7× the single-slice forward latency of SmallCNN (4.3×
+for the pretrained model in fold-1 development, `4.93 vs 1.16 ms`; 4.5× for the
+scratch model in fold-1 development, `5.19 vs 1.16 ms`; and 4.7× in the final
+test benchmark, `5.37 vs 1.14 ms`). Trained from scratch (80 epochs), that extra
+cost yields a non-significant accuracy gain; initialised from ImageNet-1k
+(40 epochs), its per-fold training time matches 80-epoch SmallCNN (~50 min/fold),
+and the five-fold ensemble scores a 20-slice scan in ~0.54 s on one A100.
 
 ## Calibration and referral
 
@@ -667,40 +686,47 @@ automated patients, applied unchanged to the 136 test patients):
   `0.906` accuracy) to test (`119/136 = 0.875` at `0.924` accuracy).
 * The ImageNet-initialised ensemble is strongly over-confident at slice level
   (slope 0.246), and slice-level Platt scaling cuts its slice ECE threefold
-  (`0.112 → 0.036`) and lowers patient ECE (`0.062 → 0.049`), while scan ECE
-  rises slightly (`0.043 → 0.059`). Because patient probabilities average
+  (`0.112 -> 0.036`) and lowers patient ECE (`0.062 -> 0.049`), while scan ECE
+  rises slightly (`0.043 -> 0.059`). Because patient probabilities average
   20-160 slices (1-8 scans), their variance is already compressed; consequently,
   applying slice-fitted Platt parameters (`b = +0.813`) directly to patient
-  averages increases SmallCNN's scan (`0.041 → 0.109`) and patient (`0.073 → 0.112`)
+  averages increases SmallCNN's scan (`0.041 -> 0.109`) and patient (`0.073 -> 0.112`)
   ECE. That higher post-Platt patient ECE is therefore a byproduct of fitting
   Platt scaling at the slice level rather than an intrinsic failure of SmallCNN.
-* The scratch ConvNeXt needs a high threshold (`τ = 0.836`) and refers 89 of 136
+* The scratch ConvNeXt needs a high threshold (`tau = 0.836`) and refers 89 of 136
   patients (65.4%).
-* Under the symmetric confidence rule `max(p, 1-p) ≥ τ`, both deployable
+* Under the symmetric confidence rule `max(p, 1-p) >= tau`, both deployable
   ensembles still automate 5 of the 16 `AD 2017-2021` test patients as NC.
 
-**Asymmetric referral sensitivity analysis (reducing automated AD false negatives).**
+**Post-hoc sensitivity analysis: asymmetric referral (`tau_NC > tau_AD`, not in `PREDECLARATION.txt`).**
+The locked test evaluation above used the pre-declared symmetric rule `tau_AD = tau_NC = 0.626`.
 Because automating a true AD patient as NC (false negative) is clinically more
 harmful than automating an NC patient as AD (which triggers specialist follow-up),
-we also evaluate an asymmetric referral rule `REFER if p(AD) < τ_AD and p(NC) < τ_NC`
-for the primary ensemble, keeping `τ_AD = 0.626` and selecting a stricter negative
-confidence threshold `τ_NC` on the 68 calibration patients:
+we also inspect an exploratory **post-hoc sensitivity curve** for the asymmetric rule
+`REFER if p(AD) < tau_AD and p(NC) < tau_NC` with `tau_AD = 0.626` fixed and four
+candidate values of `tau_NC`:
 
-| Rule on primary ensemble (`τ_AD = 0.626`) | `τ_NC` | Calibration coverage (accepted acc.) | Calibration auto-FN / auto-FP | Test coverage (accepted acc.) | Test auto-FN (`2017-21 AD` missed & automated) / auto-FP |
+| Exploratory rule on primary ensemble (`tau_AD = 0.626`) | `tau_NC` | Calibration coverage (accepted acc.) | Calibration auto-FN / auto-FP | Test coverage (accepted acc.) | Test auto-FN (`2017-21 AD` missed & automated) / auto-FP |
 |---|---:|---|---|---|---:|
-| Symmetric baseline (`τ_NC = τ_AD`) | 0.626 | 0.941 (64/68, acc. 0.906) | 2 / 4 | 0.875 (119/136, acc. 0.924) | 5 / 4 |
-| Moderate asymmetric (refers cal. FN `p(NC)=0.662`) | 0.750 | 0.824 (56/68, acc. 0.911) | 1 / 4 | 0.801 (109/136, acc. 0.936) | 3 / 4 |
-| Conservative asymmetric (≥ 75% cal. coverage) | 0.800 | 0.794 (54/68, acc. 0.907) | 1 / 4 | 0.779 (106/136, acc. 0.943) | 2 / 4 |
-| Zero-FN calibration rule (above cal. FN `p(NC)=0.910`) | 0.920 | 0.588 (40/68, acc. 0.900) | 0 / 4 | 0.566 (77/136, acc. 0.948) | 0 / 4 |
+| Pre-declared symmetric rule (`tau_NC = tau_AD`) | 0.626 | 0.941 (64/68, acc. 0.906) | 2 / 4 | 0.875 (119/136, acc. 0.924) | 5 / 4 |
+| Post-hoc sensitivity point 1 (above cal. FN `p(NC)=0.662`) | 0.750 | 0.824 (56/68, acc. 0.911) | 1 / 4 | 0.801 (109/136, acc. 0.936) | 3 / 4 |
+| Post-hoc sensitivity point 2 | 0.800 | 0.794 (54/68, acc. 0.907) | 1 / 4 | 0.779 (106/136, acc. 0.943) | 2 / 4 |
+| Post-hoc sensitivity point 3 (above cal. FN `p(NC)=0.910`) | 0.920 | 0.588 (40/68, acc. 0.900) | 0 / 4 | 0.566 (77/136, acc. 0.948) | 0 / 4 |
 
-Raising `τ_NC` from `0.626` to `0.800` on the calibration split cuts automated
-`2017-2021 AD` false negatives on the locked test set from `5` down to `2`
-(-60%) and raises automated test accuracy to `94.3%` (`100/106`) while still
-automating `77.9%` of test patients. Eliminating all automated AD false
-negatives (`0/5`, `τ_NC = 0.920`) is possible but reduces test coverage to
-`56.6%` (`77/136`), confirming that full protection against the acquisition
-shortcut requires protocol-aware referral rather than confidence thresholding
-alone.
+On the 68-patient calibration set there are only 22 AD patients and only 2 AD
+false negatives—at `p(NC) = 0.662` (`p(AD) = 0.338`) and `p(NC) = 0.910`
+(`p(AD) = 0.090`)—with zero calibration AD patients in between. Consequently,
+calibration data alone cannot distinguish `tau_NC = 0.750` from `tau_NC = 0.800`
+(in fact, `0.750` has slightly higher calibration accuracy, `0.911` vs `0.907`,
+because moving from `0.750` to `0.800` only refers 2 true NC calibration
+patients). We therefore report the table strictly as a post-hoc trade-off curve
+rather than claiming a single calibration-selected `tau_NC`: raising `tau_NC`
+into the `0.750-0.800` range reduces automated `2017-2021 AD` test false
+negatives from `5` to `2-3` at `77.9-80.1%` test coverage (`93.6-94.3%`
+accuracy), whereas eliminating all automated AD false negatives (`0/5`,
+`tau_NC = 0.920`) cuts test coverage to `56.6%` (`77/136`). Full protection
+against the acquisition shortcut therefore requires protocol-aware referral and
+a larger calibration cohort rather than post-hoc confidence thresholding alone.
 
 ![Left: slice reliability after Platt scaling. Middle and right: patient confidence of correct and wrong test predictions with the frozen tau](figures/test_calibration.png)
 
@@ -796,8 +822,9 @@ mid-sagittal slices alongside the recorded model probabilities:
   NC, the primary ensemble assigns slice p(AD) = 0.040 and 0.047 and patient
   p(AD) = 0.31 (3 scans, confidence 0.69 > 0.626) and 0.09 (1 scan, confidence
   0.91 > 0.626), automating both as NC. SmallCNN makes the exact same automated
-  errors (p(AD) = 0.29 and 0.10). Under the asymmetric referral rule (`τ_NC = 0.800`),
-  Case 2 (`p(NC) = 0.69 < 0.800`) is successfully referred to a specialist.
+  errors (p(AD) = 0.29 and 0.10). Under a stricter negative confidence threshold
+  (`tau_NC = 0.750` or `0.800` in the post-hoc sensitivity analysis above),
+  Case 2 (`p(NC) = 0.69`) would be routed to specialist review.
 * **Cases 6-9 (Examples 5-8) — Borderline 2017-2021 patients caught by the
   referral rule.** When moderate structural atrophy or degraded scan contrast
   (e.g. Case 7 / Example 6) competes with the 2017-2021 acquisition prior,
@@ -829,51 +856,56 @@ mid-sagittal slices alongside the recorded model probabilities:
 2. **Recommended operating configuration.** Use the five-fold **ImageNet-1k–
    initialised ConvNeXt-Tiny ensemble** with three-slice context and Platt
    scaling (`a = 0.246, b = 0.193`). Under the pre-declared symmetric threshold
-   `τ = 0.626` (`REFER` when `max(p, 1-p) < 0.626`), the pipeline automates 119
+   `tau = 0.626` (`REFER` when `max(p, 1-p) < 0.626`), the pipeline automates 119
    of 136 test patients (87.5% coverage, 92.4% accuracy, 9 automated errors) and
    refers 17 patients (12.5% specialist load, catching 7 of the 16 unreferred
-   patient errors including the single 2011-2016 AD miss). Where false negatives
-   carry higher clinical cost than specialist referrals, we recommend the
-   calibration-fitted **asymmetric rule** (`τ_AD = 0.626, τ_NC = 0.800`), which
-   maintains **77.9%** test coverage (`106/136`) at **94.3%** automated accuracy
-   while cutting automated 2017-2021 AD false negatives from `5` to `2`.
+   patient errors including the single 2011-2016 AD miss). For future prospective
+   calibration on a larger cohort where false negatives carry higher clinical
+   cost than specialist referrals, our post-hoc sensitivity analysis shows that
+   an asymmetric rule (`tau_AD = 0.626` with a stricter `tau_NC` in `0.750-0.800`)
+   can reduce automated 2017-2021 AD false negatives while keeping roughly 78-80%
+   coverage, though selecting `tau_NC` reliably requires more than the 22 AD
+   patients available in our 68-patient calibration split.
 3. **Is ConvNeXt worth its compute overhead over SmallCNN?**
    * *From scratch:* **No.** Scratch ConvNeXt-Tiny requires 284× the parameters
      (`27.8 M` vs `97.8 k`), 6.4× the training memory (`4,656 MiB` vs `727 MiB`)
-     and 4.5×-4.7× the single-slice latency (`5.19-5.27 ms` vs `1.14-1.16 ms`),
+     and 4.5×–4.6× the single-slice latency (`5.19-5.27 ms` vs `1.14-1.16 ms`),
      yet attends heavily to background pixels (Grad-CAM outside-head share
      `0.72-0.83`), does not significantly beat SmallCNN in single-fold
      development (`+0.032` patient accuracy, `t = 1.7`), trails the calibrated
      SmallCNN ensemble on test (`0.801` vs `0.875` patient accuracy, McNemar
      `p = 0.041`), and must refer 65.4% of test patients to maintain 90% accuracy.
    * *With ImageNet-1k initialisation:* **Context-dependent — yes for
-     single-model deployment, slice-level accuracy, and uncalibrated robustness;
-     marginal at the patient level once a five-fold SmallCNN ensemble is
-     threshold-calibrated via Platt scaling.** Across the five paired
-     development folds (476 patients, single-fold models), pretrained
-     ConvNeXt-Tiny beats SmallCNN by **+0.108** slice (`t = 6.1`), **+0.128**
-     scan (`t = 3.9`) and **+0.090** patient accuracy (`t = 7.1`), and by
-     **+0.172** scan AUROC on 2017-2021 scans (`0.778` vs `0.606`, `t = 5.1`),
-     and before Platt scaling its five-fold test ensemble still leads SmallCNN
-     by **+0.059** patient accuracy (`0.882` vs `0.824`). However, once five-fold
-     ensembling and Platt intercept calibration (`b = +0.813`) correct
-     SmallCNN's threshold offset, SmallCNN closes the test patient-accuracy gap
-     to **+0.007** (`0.882` vs `0.875`, McNemar `p = 1.00`) and matches test
-     2017-2021 scan AUROC (`0.878` vs `0.866`) at 284× fewer parameters and
-     4.7× lower latency (`1.14 ms` vs `5.37 ms`). Thus, for CPU/edge environments
-     a Platt-calibrated SmallCNN ensemble is the more economical choice; for
-     offline or hospital-server GPU triage (~27 ms/slice, ~0.54 s per 20-slice
-     scan on one A100), the pretrained ConvNeXt ensemble remains the primary
-     recommendation for its superior slice accuracy (`0.867` vs `0.826`),
-     stronger 476-patient development generalisation, and zero automated
-     2011-2016 AD misses (`0` vs `1`).
+     calibration-independent threshold robustness, single-model deployment, and
+     slice-level accuracy; marginal at the patient level once a five-fold
+     SmallCNN ensemble is threshold-calibrated via Platt scaling.** Before Platt
+     scaling, the five-fold pretrained ConvNeXt ensemble already achieves
+     **0.882** test patient accuracy and **0.854** balanced accuracy (`0.862`
+     slice accuracy), whereas the uncalibrated SmallCNN ensemble achieves only
+     **0.824** patient accuracy and **0.751** balanced accuracy (`0.783` slice
+     accuracy), missing `20/44` AD test patients. SmallCNN closes the patient-level
+     gap (`0.882` vs `0.875`, McNemar `p = 1.00`, and `0.878` vs `0.866` on
+     2017-2021 scan AUROC) only after a large `+0.813` Platt intercept shift
+     fitted on 68 calibration patients—an offset whose transferability to a new
+     hospital or scanner distribution is uncertain. Thus, for strict CPU/edge
+     environments a Platt-calibrated SmallCNN ensemble is the more economical
+     choice (284× fewer parameters and 4.3×–4.7× lower single-slice latency,
+     `1.14-1.16 ms` vs `4.93-5.37 ms`); for offline or hospital-server GPU triage
+     (~27 ms/slice, ~0.54 s per 20-slice scan on one A100), the pretrained
+     ConvNeXt ensemble remains the primary recommendation primarily for its
+     calibration-independent threshold stability (`0.882 -> 0.882`), supported by
+     its 476-patient single-fold development lead (`+0.090` patient accuracy,
+     `t = 7.1`), higher slice accuracy (`0.867` vs `0.826`), and referral of the
+     single borderline `2011-2016 AD` miss (Case 10).
 4. **Conditions before clinical or multi-site progression.**
    * **External protocol-matched validation:** Re-evaluate on an independent
      cohort where AD and NC patients are balanced within each scanner vendor,
-     field strength and acquisition era, verifying that subgroup sensitivity on
-     modern accelerated sequences is ≥ 0.85.
+     field strength and acquisition era, verifying that subgroup AD sensitivity on
+     modern accelerated sequences meets a pre-deployment benchmark of ≥ 0.85
+     (a proposed target chosen to match the primary ensemble's overall patient
+     balanced accuracy of `0.866` and AD recall of `0.818`).
    * **Subgroup-aware and patient-level calibration:** Fit Platt scaling at the
-     patient/scan level (and with asymmetric thresholds `τ_NC > τ_AD`), and
+     patient/scan level (and with asymmetric thresholds `tau_NC > tau_AD`), and
      enforce mandatory `REFER` whenever a scan comes from an underrepresented
      protocol-by-diagnosis cell.
    * **Anatomically constrained pooling:** Replace full-frame global average
