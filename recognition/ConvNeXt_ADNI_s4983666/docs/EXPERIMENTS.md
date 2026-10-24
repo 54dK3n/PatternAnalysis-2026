@@ -1,8 +1,10 @@
 # Development experiments
 
 All numbers below are copied from the `metrics.json` files of completed Rangpur
-runs (NVIDIA A100-PCIE-40GB). Every model was trained from random
-initialization. None of these runs used the calibration or test patients.
+runs (NVIDIA A100-PCIE-40GB). Models in Rounds 1-4 and Round 7 were trained
+from random initialization; Rounds 5-6 evaluate ConvNeXt-Tiny initialized from
+official ImageNet-1k weights. None of the development runs below used the
+calibration or test patients.
 
 Two evaluation sets appear:
 
@@ -228,11 +230,51 @@ Out-of-fold scan error by acquisition group (all 1,050 development scans):
 | AD acquired 2017-2021 (86) | 0.733 | 0.674 | 0.837 |
 | NC (547) | 0.080 | 0.148 | 0.099 |
 
-* ImageNet initialisation is the first configuration that beats both models
-  consistently on every fold at slice and scan level, with mean slice accuracy
-  0.798 (3 of 5 folds >= 0.80) and patient accuracy 0.840 (all folds >= 0.82).
-* The gain is on scans that the acquisition style already separates (earlier
-  AD and NC errors roughly halve). On AD scans acquired 2017-2021 the error is
-  unchanged (0.73) and the 2017-21 AUROC gain over the scratch model is not
-  significant. It does separate those scans better than the CNN.
+* Among the pre-declared configurations, ImageNet initialisation is the first
+  that beats both Round-3 scratch models on every fold at slice and scan level,
+  with mean slice accuracy 0.798 (3 of 5 folds >= 0.80) and patient accuracy
+  0.840 (all folds >= 0.82).
+* The gain is concentrated on scans that the acquisition style already separates
+  (earlier AD and NC errors roughly halve). On AD scans acquired 2017-2021 the
+  error is unchanged (0.73) and the 2017-21 AUROC gain over the scratch model is
+  not significant (+0.042, t = 1.5). It separates those scans better than the
+  Round-3 `strong`-augmented CNN (+0.172, t = 5.1).
 * Training accuracy reaches 1.00; one seed per fold.
+
+## Round 7 (post-hoc control): five-fold SmallCNN with scanner augmentation
+
+Added on 2026-10-21 after the locked test evaluation (`Slurm 681962`), in
+response to review. Because `scanner` augmentation improved `SmallCNN` on folds
+4 and 5 in Round 4 while the pre-declared five-fold baseline retained `strong`
+augmentation, folds 1-3 of `SmallCNN` were trained with the identical Round-4
+recipe (80 epochs, LR 1e-3, weight decay 1e-4, three-slice context, `scanner`
+augmentation, EMA 0.999, final-epoch weights, seed `3710 + fold`) and combined
+with the Round-4 fold-4 and fold-5 checkpoints (`results/posthoc_cnn_scanner_20261021/`).
+All five checkpoints replayed bit-for-bit.
+
+| Fold | Slice acc. / AUROC | Scan acc. / AUROC | Patient acc. / AUROC | Patient FP / FN | Train acc. | 2017-21 scan AUROC | 2017-21 scan bal. acc. |
+|---:|---|---|---|---|---:|---:|---:|
+| 1 | 0.793 / 0.878 | 0.815 / 0.926 | 0.768 / 0.869 | 16 / 6 | 0.846 | 0.637 | 0.525 |
+| 2 | 0.759 / 0.828 | 0.805 / 0.912 | 0.832 / 0.934 | 4 / 12 | 0.849 | 0.867 | 0.616 |
+| 3 | 0.776 / 0.863 | 0.825 / 0.923 | 0.863 / 0.932 | 7 / 6 | 0.859 | 0.668 | 0.545 |
+| 4 | 0.758 / 0.841 | 0.828 / 0.895 | 0.823 / 0.870 | 8 / 9 | 0.840 | 0.752 | 0.587 |
+| 5 | 0.756 / 0.838 | 0.764 / 0.893 | 0.768 / 0.858 | 6 / 16 | 0.855 | 0.710 | 0.452 |
+| mean ± sd | 0.769 ± 0.016 / 0.850 ± 0.020 | 0.808 ± 0.026 / 0.910 ± 0.015 | 0.811 ± 0.042 / 0.893 ± 0.037 | 41 / 49 total | 0.850 ± 0.007 | 0.726 ± 0.090 | 0.545 ± 0.063 |
+
+Paired differences over the five folds (4 df; 2.78 = 5% two-sided threshold):
+
+| Comparison | Slice acc. | Scan acc. | Patient acc. | 2017-21 scan AUROC |
+|---|---|---|---|---|
+| `SmallCNN (scanner)` - `SmallCNN (strong, R3)` | +0.079 (t = 4.6, 5/5 folds) | +0.107 (t = 4.2, 5/5 folds) | +0.061 (t = 6.7, 5/5 folds) | +0.121 (t = 4.0, 5/5 folds) |
+| `Pretrained Tiny (R6)` - `SmallCNN (scanner)` | +0.029 (t = 3.0, 5/5 folds) | +0.021 (t = 2.0, 5/5 folds) | +0.029 (t = 1.5, 3/5 folds) | +0.052 (t = 2.1, 4/5 folds) |
+
+* `Scanner` augmentation improves `SmallCNN` on every fold across slice, scan
+  and patient accuracy as well as 2017-2021 scan AUROC, reducing total patient
+  false negatives across the five folds from 90 (`strong`) to 49 (`scanner`,
+  while false positives rise from 29 to 41).
+* Against `SmallCNN + scanner`, the ImageNet-initialised ConvNeXt-Tiny stays
+  ahead on all five folds at slice (+0.029, t = 3.0) and scan (+0.021, t = 2.0)
+  levels, on 4 of 5 folds for 2017-2021 scan AUROC (+0.052, t = 2.1), and on 3
+  of 5 folds at patient level (+0.029, t = 1.5, not significant). See Section
+  9.4 of `REPORT.md` for the corresponding five-fold ensemble calibration and
+  test evaluation (`Slurm 681963`).

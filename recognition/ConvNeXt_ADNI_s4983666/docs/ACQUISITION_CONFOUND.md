@@ -36,10 +36,11 @@ Siemens; "accelerated" = GRAPPA/SENSE/"Accelerated" in the name):
 | Siemens/other, accelerated | 159 | 438 |
 | GE, accelerated | 90 | 109 |
 
-Every NC scan was acquired in 2017-2021 with an accelerated sequence. Any scan
-acquired before 2017, or with a non-accelerated or Philips sequence, is AD. A
-classifier that recognises the acquisition style therefore separates more than
-80% of the AD scans from all NC scans without looking at atrophy.
+In the development split, every NC scan was acquired in 2017-2021 with an
+accelerated sequence, and any scan acquired before 2017, or with a
+non-accelerated or Philips sequence, is AD. A classifier that recognises the
+acquisition style therefore separates more than 80% of the development AD scans
+from all NC scans without looking at atrophy.
 
 ## Errors follow the confound
 
@@ -64,9 +65,12 @@ discrimination remains:
 | 2017-2021 only (86 AD, 547 NC) | SmallCNN | **0.654** | 0.532 | 0.801 |
 
 (Plain accuracy rises on the subset only because 86% of it is NC.) Part of the
-headline AUROC comes from the acquisition period. ConvNeXt keeps clearly more
-discrimination than the CNN once that cue is removed, which suggests it relies
-less on the shortcut.
+headline AUROC comes from the acquisition period. Under the Round-3
+`strong`-augmentation recipe, scratch ConvNeXt keeps higher discrimination on
+this subset than SmallCNN (0.729 vs 0.654 pooled scan AUROC), though adding
+`scanner` augmentation to SmallCNN narrows that gap in five-fold development
+(0.726 ± 0.090 vs 0.736 ± 0.048 for scratch ConvNeXt and 0.778 ± 0.047 for
+pretrained ConvNeXt; see [EXPERIMENTS.md](EXPERIMENTS.md)).
 
 The fold-to-fold spread follows the same pattern: the folds differ mainly in
 how many AD patients acquired in 2017-2021 land in validation (5 to 14 of 31),
@@ -103,9 +107,10 @@ fixed**, and scores each fold once on its validation patients (Slurm job
 | 5 | 0.936 (26 / 64) | 0.973 (21 / 84) |
 | pooled out-of-fold | 0.807 (slice 0.754) | **0.986** (slice 0.931) |
 
-* With the diagnosis and period fixed, the vendor/sequence is recognised almost
-  perfectly from pixels: the scanner signature is far stronger than the
-  disease signal (diagnosis scan AUROC 0.85).
+* With the diagnosis and period fixed, the vendor/sequence is recognised with
+  very high accuracy from pixels (pooled scan AUROC 0.986): the scanner
+  signature is more easily separable from pixels than the disease signal itself
+  (diagnosis scan AUROC 0.85).
 * The acquisition period within AD patients is recognised with pooled AUROC
   0.81, but unevenly (0.60-0.97 by fold). This probe is itself partly
   confounded: 2017-2021 AD patients are newer ADNI-3 enrolments and may differ
@@ -202,7 +207,7 @@ Anatomical and spatial interpretation of the maps (`gradcam_group_means.png` and
 | Option | Idea | Cost / caveat |
 |---|---|---|
 | Report by acquisition period | Overall and 2017-2021-only metrics, here and on test | Free; does not change the model |
-| Scanner-robust augmentation | Random bias field, noise, blur/sharpening, stronger contrast/gamma so texture and contrast stop identifying the scanner | Implemented as the `scanner` profile. Screened on folds 4-5 (Slurm 653053): CNN 2017-21 scan AUROC 0.718 / 0.560 -> 0.752 / 0.710; scratch ConvNeXt 0.818 / 0.696 -> 0.779 / 0.725; no gain with ImageNet initialisation. Helps the CNN, mixed otherwise ([EXPERIMENTS.md](EXPERIMENTS.md)) |
+| Scanner-robust augmentation | Random bias field, noise, blur/sharpening, stronger contrast/gamma so texture and contrast stop identifying the scanner | Implemented as the `scanner` profile. Screened on folds 4-5 (Slurm 653053): CNN 2017-21 scan AUROC 0.718 / 0.560 -> 0.752 / 0.710; scratch ConvNeXt 0.818 / 0.696 -> 0.779 / 0.725; no gain with ImageNet initialisation. Completed across all five folds for SmallCNN post-hoc (Round 7, Slurm 681962/681963): development 2017-21 scan AUROC rises from 0.606 ± 0.081 to 0.726 ± 0.090 (patient acc. 0.750 -> 0.811), though on test its 2017-21 scan AUROC is 0.805 (vs 0.866 for `strong` SmallCNN and 0.878 for pretrained ConvNeXt) ([EXPERIMENTS.md](EXPERIMENTS.md)) |
 | ImageNet initialisation | Generic pretrained features instead of features learnt only from this confounded data (round 5) | Overall accuracy up (fold 4 slice 0.817), 2017-21 scan AUROC unchanged (0.770 / 0.740); does not remove the shortcut |
 | Train only on 2017-2021 scans | Removes the period cue completely | Only 86 AD scans left; likely too few |
 | Re-weight by period x diagnosis | Up-weight 2017-2021 AD scans | Cannot balance cells that are empty (no NC before 2017) |
