@@ -21,9 +21,9 @@ low-confidence patients to a specialist instead of automating them.
 
 ## How it works
 
-![Pipeline: three context slices pass through the ConvNeXt-Tiny stem, four stages and the head; slice logits are averaged per scan or patient, Platt-scaled and compared with the referral threshold tau](figures/architecture.png)
+![Pipeline: three context slices pass through the ConvNeXt-Tiny stem, four stages and the head; each slice logit is Platt-scaled, calibrated slice probabilities are averaged per scan or patient and compared with the referral threshold tau](figures/architecture.png)
 
-*Figure 1. Pipeline overview: three neighbouring sagittal slices enter the ConvNeXt-Tiny stem and four stages; slice logits are averaged per scan or patient, calibrated by Platt scaling and compared against the referral threshold τ.*
+*Figure 1. Pipeline overview: three neighbouring sagittal slices enter the ConvNeXt-Tiny stem and four stages; each slice logit is calibrated by Platt scaling, the calibrated slice probabilities are averaged per scan or patient, and the patient probability is compared against the referral threshold τ.*
 
 Each input is one slice stacked with its two neighbouring slices from the same
 scan (three channels), so the 2D network sees some through-plane anatomy. The
@@ -211,10 +211,10 @@ SPLITS="$HOME/comp3710/adni_splits_v1"
 WEIGHTS="$HOME/comp3710/weights/convnext_tiny_1k_224_ema.pth"
 
 # 1. Train the primary five-fold ImageNet-1k-initialised ConvNeXt-Tiny ensemble
-# (40 epochs, 3-slice context, strong augmentation, EMA 0.999, AdamW 1e-4 / wd 0.05).
+# (40 epochs, 3-slice context, strong augmentation, EMA 0.999, AdamW lr 5e-5 / wd 0.05).
 for f in 1 2 3 4 5; do
     python train.py --splits-dir "$SPLITS" --output "runs/pt_cv/fold${f}" --fold "$f" \
-        --model convnext_tiny_in1k --pretrained-weights "$WEIGHTS" --epochs 40
+        --model convnext_tiny_in1k --pretrained-weights "$WEIGHTS" --epochs 40 --lr 5e-5
 done
 
 # 2. Train the five-fold scratch ConvNeXt-Tiny and SmallCNN baselines (80 epochs).
@@ -379,9 +379,23 @@ independent calibration set.
 
 ### Acquisition confound
 
-The metadata file names show that acquisition period and scanner are entangled
-with the diagnosis: all 417 development scans acquired 2011-2016 are AD, and
-all 547 NC scans were acquired 2017-2021 with accelerated sequences. AD scans
+The JPEG slices carry no acquisition information (no EXIF, identical
+quantisation tables, all files copied on 14 September 2023), but the `raw`
+entry of `meta_data_with_label.json` holds the original ADNI file name with
+the sequence and a date stamp, e.g.
+`ADNI_XXX_S_XXXX_MR_MPRAGE_br_raw_20120712115040983_76_S157373_I316011.nii`
+(subject masked). Parsed for all 1,526 scans, every one of the 783 NC scans is
+dated 2017-02 to 2021-05, while 623 of the 743 AD scans are dated 2011-02 to
+2015-10; no scan falls between. Subject numbers (all older scans < 6000, i.e.
+enrolled before ADNI-3) and sequence names (non-accelerated and Philips
+sequences only in AD) agree. In development, all 417 scans acquired 2011-2016
+are AD and all 547 NC scans were acquired 2017-2021 with accelerated sequences.
+
+![Acquisition examples](figures/adni/acquisition_examples.png)
+
+*Random slices per diagnosis and acquisition period (year and sequence from the metadata file name; IDs removed). The periods are not obviously distinguishable by eye.*
+
+The diagnosis is therefore entangled with acquisition period and scanner. AD scans
 acquired 2017-2021 are misclassified far more often (ConvNeXt scan error 0.67
 vs 0.30 for earlier AD scans; CNN 0.84 vs 0.45). On the 633 scans acquired
 2017-2021, where both classes share the same period, scan AUROC falls from
@@ -415,8 +429,9 @@ validation scans:
   AUROC (though on fold 5 it misses 26/26 `2017-2021 AD` scans, reducing fold-5
   2017-2021 scan balanced accuracy to 0.452), is mixed for scratch ConvNeXt and
   adds nothing to the pretrained model. We retained `strong` augmentation across
-  all three pre-declared five-fold ensembles for a controlled single-variable
-  comparison, and later ran a post-hoc five-fold `SmallCNN + scanner aug.`
+  all three pre-declared five-fold ensembles so they share the same split,
+  augmentation and evaluation pipeline (learning rate, epochs and weight decay
+  still differ, so this is not a single-variable comparison), and later ran a post-hoc five-fold `SmallCNN + scanner aug.`
   control after the locked test run (see *Post-hoc control: SmallCNN with
   scanner augmentation* below).
 * Five folds (round 6, [`config/experiments_round6_pretrained_cv.json`](config/experiments_round6_pretrained_cv.json),
@@ -585,8 +600,8 @@ Scans by acquisition period (test: 122 AD scans 2011-2016 across 28 AD patients;
      its test patient accuracy by **+0.051** (`0.824 -> 0.875`) and slice accuracy
      by **+0.043** (`0.783 -> 0.826`).
 * **2017-2021 subgroup on test vs development:** Although pretrained ConvNeXt
-  outperformed SmallCNN by +0.172 scan AUROC on 2017-2021 scans in single-fold
-  development (`0.778` vs `0.606`), on the 184 test scans from 2017-2021 their
+  outperformed SmallCNN by +0.172 scan AUROC on 2017-2021 scans in five-fold
+  development (fold means `0.778` vs `0.606`), on the 184 test scans from 2017-2021 their
   ensemble scan AUROCs are nearly tied (`0.878` vs `0.866`), and at the
   calibrated threshold the pretrained ensemble misses `14/27` 2017-2021 AD scans
   (versus `11/27` for SmallCNN and `9/27` for scratch ConvNeXt, which achieves
@@ -621,7 +636,7 @@ ensembles is not statistically significant on the 136 test subjects (`120/136`
 vs `119/136`, disagreeing on 7 of 136 patients, McNemar p = 1.00; with n = 136
 patients, non-significance does not prove equivalence), while pretrained
 ConvNeXt retains a +0.041 slice-accuracy lead (`0.867` vs `0.826`) and an
-advantage in the 476-patient paired single-fold development comparison
+advantage in the 476-patient paired five-fold development comparison
 (`+0.090` patient accuracy vs `strong` SmallCNN, t = 7.1; `+0.029` vs post-hoc
 `scanner` SmallCNN, t = 1.5) and uncalibrated test ensemble comparison (`0.882`
 vs `0.824` `strong` / `0.838` `scanner`). Both pre-declared ensembles
@@ -816,7 +831,7 @@ area under the risk-coverage curve (lower is better):
   referral (`8 FP` and `8 FN`, comprising `7` FN from 2017-2021 and `1` FN from
   2011-2016); (ii) `16` total test AD patients scanned in 2017-2021 (of whom `7`
   are missed at 0.5: `5` automated as NC and `2` referred); and (iii) `16` of
-  the `17` referred test patients (`9 NC` and `7 AD`) come from 2017-2021 scans
+  the `17` referred test patients (`10 NC` and `6 AD`) come from 2017-2021 scans
   (the 17th referred patient is the single missed `2011-2016 AD` patient, Case 10
   below).
 
@@ -906,52 +921,119 @@ Cross-model comparison of the five most confident slice-level errors (Cases 1-5,
 | 9 (Ex. 8) | 2017-21 NC | 1 | — | 0.53, REFER | 0.51, REFER | 0.51, REFER |
 | 10 (pre-2017 FN) | 2011-16 AD | 6 | — (scan p: 0.29-0.89) | 0.47, REFER | 0.45, REFER | 0.31, NC (wrong) |
 
-Qualitative notes below are based on **non-clinician visual inspection** of the
-mid-sagittal slices alongside the recorded model probabilities:
+**Is the pattern more than five anecdotes?** Ten hand-picked cases cannot show
+a pattern, so the same grouping was applied to every patient. *Figure 9a* shows
+all 136 test patients. Before referral, the primary model gets 16 wrong. Fifteen
+are from 2017-2021: all 8 false positives (NC) and 7 of the 8 false negatives
+(AD). Sixteen of the 17 referred patients are also from 2017-2021 (10 NC, 6 AD).
 
-* **Cases 1 and 5 — Ventricular enlargement in 2017-2021 NC patients
-  (confident false positives).** Visually, both single-scan NC subjects exhibit
-  marked lateral-ventricle dilatation, a thinned corpus callosum and widened
-  parieto-occipital sulci that resemble gross AD atrophy. Even though their
-  2017-2021 acquisition period biases the model toward NC, this macroscopic
-  atrophy-like appearance seems to dominate: the primary ensemble assigns slice
-  p(AD) = 0.971 and 0.953 and patient p(AD) = 0.84 and 0.87, automating both as
-  AD. SmallCNN refers Case 1 (p(AD) = 0.54 < 0.563) but also automates Case 5 as
-  AD (p(AD) = 0.77).
-* **Case 3 — Multi-scan borderline false positive on a 2017-2021 NC patient.**
-  A single sagittal slice with widened sulci and periventricular hypointensity
-  scores p(AD) = 0.961, but averaging across all 40 slices of the patient's two
-  scans pulls the patient probability down to p(AD) = 0.630—just 0.004 above
-  τ = 0.626, so the referral rule narrowly misses catching it.
-* **Cases 2 and 4 — Confounded 2017-2021 AD patients with mild midline atrophy
-  (confident false negatives).** Both are true AD patients scanned in 2017-2021
-  whose mid-sagittal slices visually preserve a relatively narrow lateral
-  ventricle and intact cortical ribbon while exhibiting global gray-white
-  contrast visually similar to the 2017-2021 accelerated-MPRAGE NC training
-  cohort. With acquisition style and subtle midline morphology both pointing to
-  NC, the primary ensemble assigns slice p(AD) = 0.040 and 0.047 and patient
-  p(AD) = 0.31 (3 scans, confidence 0.69 > 0.626) and 0.09 (1 scan, confidence
-  0.91 > 0.626), automating both as NC. SmallCNN makes the same automated
-  errors (p(AD) = 0.29 and 0.10). Under a stricter negative confidence threshold
-  (`tau_NC = 0.750` or `0.800` in the post-hoc sensitivity analysis above),
-  Case 2 (`p(NC) = 0.69`) would be routed to specialist review.
-* **Cases 6-9 (Examples 5-8) — Borderline 2017-2021 patients caught by the
-  referral rule.** When moderate structural atrophy or degraded scan contrast
-  (e.g. Case 7 / Example 6) competes with the 2017-2021 acquisition prior,
-  calibrated patient probabilities cluster near 0.49–0.53 (confidence
-  0.50–0.53 < τ = 0.626), and all three ensembles route these ambiguous
-  patients to a specialist.
-* **Case 10 — The single misclassified 2011-2016 AD patient (caught by referral
-  in ConvNeXt, automated as NC by SmallCNN).** Of the 122 `2011-2016 AD` test
-  scans across 28 patients, the primary ensemble misclassifies only 6 scans: 1
-  borderline scan (`p(AD) = 0.48`) from a multi-scan AD patient whose overall
-  patient prediction remains correctly AD, and 5 of the 6 longitudinal scans of
-  Case 10 (`scan p(AD) = 0.29, 0.35, 0.37, 0.42, 0.49`, while its sixth scan
-  scores `0.89`). Averaged across all 120 slices, Case 10 receives `p(AD) = 0.47`
-  (`confidence 0.53 < 0.626`) and is safely referred by the primary ConvNeXt
-  ensemble (`0` automated AD misses in 2011-2016), whereas SmallCNN assigns
-  `p(AD) = 0.31` (`confidence 0.69 > 0.563`) and wrongly automates this patient
-  as NC.
+![Test patients by group](figures/adni/test_patient_groups.png)
+
+*Figure 9a. Calibrated patient p(AD) of all 136 test patients for the primary
+ensemble, by diagnosis, acquisition period and enrolment band (subject number
+< 6000 = enrolled before ADNI-3). Crosses: wrong before referral; grey band:
+referred.*
+
+The test subgroups are small (6 of 25 vs 2 of 67), so the same grouping was
+repeated on the 476 development patients. Each was scored out-of-fold by the
+fold model that never trained on it, at the raw 0.5 threshold. These patients
+were never used to choose this analysis. Patient error rate, with Wilson 95%
+CI and Fisher's exact test (`results/failure_evidence_20261026/`):
+
+| Group | Dev. OOF, pretrained | Dev. OOF, scratch | Dev. OOF, SmallCNN | Test, pretrained ensemble |
+|---|---|---|---|---|
+| AD, any scan 2011-15 | 21/108 = 0.19 [0.13, 0.28] | 31/108 = 0.29 | 51/108 = 0.47 | 1/28 = 0.04 [0.01, 0.18] |
+| AD, 2017-21 only | **31/47 = 0.66** [0.52, 0.78] | 28/47 = 0.60 | 39/47 = 0.83 | **7/16 = 0.44** [0.23, 0.67] |
+| Fisher p (AD rows) | 4 × 10⁻⁸ | 5 × 10⁻⁴ | 4 × 10⁻⁵ | 0.002 |
+| NC, subject < 6000 | **12/88 = 0.14** [0.08, 0.22] | 22/88 = 0.25 | 15/88 = 0.17 | **6/25 = 0.24** [0.11, 0.43] |
+| NC, subject ≥ 6000 | 12/233 = 0.05 [0.03, 0.09] | 23/233 = 0.10 | 14/233 = 0.06 | 2/67 = 0.03 [0.01, 0.10] |
+| Fisher p (NC rows) | 0.016 | 0.001 | 0.004 | 0.005 |
+
+The test findings repeat in development for all three models, so they are not
+an artefact of the 16 test errors.
+
+* **Missed AD patients are mostly from 2017-2021.** In development, every
+  model has about 2-3 times the error rate on AD patients scanned only in
+  2017-2021. Cases 2 and 4 belong
+  to this group, as do 117 of the 120 AD scans from 2017-2021. The acquisition-confound section gives
+  the two explanations that the data cannot separate: an acquisition style
+  shared with NC, or a milder disease stage.
+* **False positives are mostly earlier-enrolled NC subjects.** Cases 1, 3 and 5
+  all have subject numbers below 6000. These subjects joined ADNI before ADNI-3
+  and were rescanned in 2017-2021. They are called AD 2-3 times as often as
+  ADNI-3 controls in development. All NC patients share the 2017-2021 acquisition period, so
+  acquisition style does not explain this difference. A plausible explanation
+  is that earlier-enrolled controls are older and show more age-related
+  atrophy. The metadata has no age field, so this is a hypothesis, not a
+  finding.
+
+**What the images can and cannot show.** *Figure 9* shows the single slice
+with the most confident wrong prediction for each patient, not a
+representative slice. Two further views reduce that selection bias.
+
+* *Figure 9b* plots the calibrated p(AD) of every slice of every scan for all
+  16 wrong test patients.
+  * Some errors are consistent across the whole scan. Case 4 stays below 0.25
+    on all 20 slices, and two NC false positives stay above 0.6 on almost every
+    slice.
+  * Other errors swing across the scan, from below 0.2 to above 0.8.
+  * Within Case 3, the 2019 scan is AD-like throughout, while the 2017 scan
+    swings between NC-like and AD-like slices.
+  * Such swings are common. In 98 of the 306 test scans (32%), some slices fall
+    on each side of 0.5 (median within-scan range 0.22). One slice therefore
+    says little about the patient, and averaging over all slices is what makes
+    patient-level decisions more stable.
+* *Figure 9c* shows the first, middle and last slice of the scan behind each
+  confident error. The 20 slices appear to cross the midline, so the outer slices show
+  the lateral ventricle of each hemisphere and the middle slice shows the
+  midline. Apparent ventricle size therefore changes with slice position as
+  much as between patients.
+
+No ventricle or cortical measurement was made, so the report draws no
+anatomical conclusion from these images. Testing the atrophy explanation would
+need registered 3D volumes and a measured quantity, such as ventricular volume,
+compared between correct and wrong patients.
+
+![Slice profiles of wrong test patients](figures/adni/failure_profiles.png)
+
+*Figure 9b. Calibrated slice p(AD) along each scan (one line per scan, legend
+= acquisition year) for all 16 test patients the primary ensemble gets wrong
+before referral. Grey band: patient-level referral band; titles: group,
+patient p(AD) and decision.*
+
+![Three slices per confident failure](figures/adni/failure_multislice.png)
+
+*Figure 9c. First, middle and last of the 20 slices of the scan behind each of
+the five confident errors in Figure 9 (same order as Cases 1-5), with slice
+p(AD). IDs removed.*
+
+Per-case notes (numbers from `test_patient_predictions.csv`; τ = 0.6256):
+
+* **Cases 1 and 5 (NC, confident false positives).** Patient p(AD) is 0.84 and
+  0.87, so both are automated as AD. SmallCNN refers Case 1 (p = 0.54) but
+  automates Case 5 as AD (0.77).
+* **Case 3 (NC, borderline false positive).** One slice reaches p(AD) = 0.961.
+  Averaging all 40 slices of the patient's two scans gives p(AD) = 0.6263, only
+  0.0007 above τ, so the patient is automated as AD instead of referred. Such
+  a small margin is within the uncertainty of a τ fitted on 68 patients.
+* **Cases 2 and 4 (2017-2021 AD, confident false negatives).** Patient p(AD) is
+  0.31 (3 scans, confidence 0.69) and 0.09 (1 scan, confidence 0.91). Both
+  confidences exceed τ, so both patients are automated as NC, by the
+  pretrained model and by SmallCNN (0.29 and 0.10). In the post-hoc asymmetric
+  analysis (`tau_NC >= 0.750`, post-hoc sensitivity analysis above), Case 2 would be referred and
+  Case 4 would not.
+* **Cases 6-9 (2017-2021, referred).** Patient p(AD) is 0.49-0.53, so all four
+  are referred. Their images were not examined for a specific cause.
+* **Case 10 (the only misclassified 2011-2016 AD patient).** Among the 122
+  2011-2016 AD test scans (28 patients), the primary ensemble misses 6 scans.
+  One is a borderline scan (`p(AD) = 0.48`) from a patient who is correct at
+  patient level. The other five are 5 of the 6 longitudinal scans of Case 10
+  (`scan p(AD) = 0.29, 0.35, 0.37, 0.42, 0.49`; the sixth scores `0.89`).
+  Averaging the calibrated probabilities of all 120 slices (equivalently, of
+  its six 20-slice scans) gives patient `p(AD) = 0.47` (`0.466`, confidence
+  `0.53 < τ`), so the primary ensemble refers Case 10. SmallCNN gives
+  `p(AD) = 0.31` and automates it as NC. This is a single patient and does not
+  amount to evidence that one model is better.
 
 ## Recommendation to the project manager
 
@@ -971,26 +1053,25 @@ mid-sagittal slices alongside the recorded model probabilities:
    refers 17 patients (12.5% specialist load, catching 7 of the 16 unreferred
    patient errors including the single 2011-2016 AD miss); with τ fitted on 68
    calibration patients, ≥ 90% automated accuracy is not guaranteed on future
-   cohorts and should be re-verified. For future prospective
-   calibration on a larger cohort where false negatives carry higher clinical
-   cost than specialist referrals, our post-hoc sensitivity analysis shows that
-   an asymmetric rule (`tau_AD = 0.626` with a stricter `tau_NC` in `0.750-0.800`)
-   can reduce automated 2017-2021 AD false negatives while keeping roughly 78-80%
-   coverage, though selecting `tau_NC` reliably requires more than the 22 AD
-   patients available in our 68-patient calibration split.
+   cohorts and should be re-verified. The post-hoc
+   sensitivity analysis suggests that an asymmetric rule (`tau_NC > tau_AD`)
+   could trade coverage for fewer automated AD false negatives. Its test
+   figures (`tau_NC` 0.750-0.800: 2-3 instead of 5, at 78-80% coverage) were
+   computed after the test set was opened, so they illustrate the trade-off
+   and must not be used to choose `tau_NC`; a value has to be fixed on a new,
+   larger calibration cohort before any test data are scored.
 3. **Is ConvNeXt worth its compute overhead over SmallCNN?**
    * *From scratch:* **No.** Scratch ConvNeXt-Tiny requires 284× the parameters
      (`27.8 M` vs `97.8 k`), 6.4× the training memory (`4,656 MiB` vs `727 MiB`)
      and 4.5×–4.6× the single-slice latency (`5.19-5.27 ms` vs `1.14-1.16 ms`),
      yet attends heavily to background pixels (Grad-CAM outside-head share
-     `0.72-0.83`), does not significantly beat SmallCNN in single-fold
+     `0.72-0.83`), does not significantly beat SmallCNN in five-fold
      development (`+0.032` patient accuracy, `t = 1.7`), trails the calibrated
      SmallCNN ensemble on test (`0.801` vs `0.875` patient accuracy, McNemar
      `p = 0.041`), and must refer 65.4% of test patients to maintain 90% accuracy.
    * *With ImageNet-1k initialisation:* **The two perform closely on this test
      split; ConvNeXt has advantages on some metrics** (uncalibrated accuracy,
-     single-fold development accuracy, patient-fitted Platt calibration and
-     slice-level accuracy), while patient accuracy is essentially tied once a
+     development accuracy and slice-level accuracy), while patient accuracy is essentially tied once a
      five-fold `strong`-augmented SmallCNN ensemble is re-centred by slice-level
      Platt scaling. This conclusion applies to the specific configurations
      tested here: we describe pretrained ConvNeXt as performing similarly to, or
@@ -1007,26 +1088,30 @@ mid-sagittal slices alongside the recorded model probabilities:
      depends on a `+0.813` slice-fitted Platt intercept shift fitted on 68
      calibration patients to reach `0.875` (`McNemar p = 1.00`, `0.878` vs
      `0.866` on 2017-2021 scan AUROC)—an offset whose transferability to a new
-     hospital or scanner distribution is uncertain, and which settles at `0.846`
-     test patient accuracy when Platt scaling is fitted directly at the patient
-     level (`0.882` vs `0.846`). Thus, for strict CPU/edge environments a
+     hospital or scanner distribution is uncertain. Under post-hoc
+     patient-level Platt scaling both models trade missed AD patients for fewer
+     false alarms (ConvNeXt `12` FN / `4` FP, `0.882`; `strong` SmallCNN `17` FN
+     / `4` FP, `0.846`), so ConvNeXt's unchanged total there is a shifted error
+     balance, not evidence of more stable decisions. Thus, for strict CPU/edge environments a
      Platt-calibrated SmallCNN ensemble is a strong lightweight choice (284×
      fewer parameters and 4.3×–4.7× lower single-slice latency, `1.14-1.16 ms`
      vs `4.93-5.37 ms`); for offline or hospital-server GPU triage (~27 ms/slice,
      ~0.54 s per 20-slice scan on one A100), we lean towards the pretrained
-     ConvNeXt ensemble primarily for its lower dependence on threshold
-     calibration (`0.882 -> 0.882`), supported by its 476-patient single-fold
+     ConvNeXt ensemble mainly because its raw scores already sit closer to a
+     usable threshold (`0.882` uncalibrated vs `0.824`), an advantage that
+     should not be overstated, supported by its 476-patient five-fold
      development lead (`+0.090` patient accuracy vs `strong` SmallCNN, `t = 7.1`;
      `+0.029` vs `scanner` SmallCNN, `t = 1.5`), higher slice accuracy (`0.867`
-     vs `0.826` / `0.812`), and referral of the single borderline `2011-2016 AD`
-     miss (Case 10).
+     vs `0.826` / `0.812`). It also refers the one 2011-2016 AD patient that
+     SmallCNN automates as NC (Case 10), but a single patient is not counted as
+     evidence.
 4. **Conditions before clinical or multi-site progression.**
    * **External protocol-matched validation:** Re-evaluate on an independent
      cohort where AD and NC patients are balanced within each scanner vendor,
      field strength and acquisition era, verifying that subgroup AD sensitivity on
      modern accelerated sequences meets a pre-deployment benchmark of ≥ 0.85
-     (a proposed target chosen to match the primary ensemble's overall patient
-     balanced accuracy of `0.866` and AD recall of `0.818`).
+     (a proposed value, set slightly above the primary ensemble's overall
+     patient AD recall of `0.818` on this test split).
    * **Subgroup-aware and patient-level calibration:** Fit Platt scaling at the
      patient/scan level (and with asymmetric thresholds `tau_NC > tau_AD`), and
      enforce mandatory `REFER` whenever a scan comes from an underrepresented
@@ -1048,6 +1133,11 @@ mid-sagittal slices alongside the recorded model probabilities:
   validation patients (±0.04 binomial standard error), calibration uses 68
   patients, and multi-seed repeats were run only on fold 1 for the scratch
   model (where patient-level seed sd was 0.030).
+* **Disease stage is not controlled:** 2017-2021 AD patients are mostly
+  ADNI-3 enrolments and earlier-enrolled NC patients are likely older, but the
+  metadata has no age or clinical scores, so the split between acquisition
+  style and disease stage or age as causes of the subgroup errors cannot be
+  measured; the failure review makes no anatomical measurement.
 * **2D slice representation and coarse Grad-CAM grid:** Slices are not
   spatially registered across patients, and the final ConvNeXt stage has a 7×8
   spatial grid.
