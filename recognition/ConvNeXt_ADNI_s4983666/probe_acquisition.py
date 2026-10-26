@@ -27,8 +27,8 @@ import sys
 import torch
 
 from dataset import load_fold, make_loader
-from dataset.acquisition import SHARED_PERIOD_START, acquisition_info
-from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
+from adni_data.acquisition import SHARED_PERIOD_START, acquisition_info
+from adni_data.augmentation import AUGMENTATION_NAMES, make_augmentation
 from engine.ema import ModelEMA
 from engine.scheduling import learning_rate
 from engine.training import train_epoch

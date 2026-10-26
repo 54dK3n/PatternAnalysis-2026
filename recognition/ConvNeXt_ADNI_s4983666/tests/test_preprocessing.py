@@ -15,9 +15,9 @@ from PIL import Image
 import torch
 
 import audit_preprocessing
-from dataset.preprocessing import (PreprocessingConfig, apply_preprocessing,
+from adni_data.preprocessing import (PreprocessingConfig, apply_preprocessing,
                                    checkpoint_preprocessing, crop_box, fit_training_crop, prepare_scans)
-from dataset.slices import ADNISliceDataset
+from adni_data.slices import ADNISliceDataset
 from engine import prediction, training
 from utils.preprocessing_artifacts import export_preprocessing_audit
 import test_adni_splits as split_fixture

@@ -10,10 +10,10 @@ from unittest import mock
 from PIL import Image, ImageOps
 import torch
 
-from dataset import splits as adni_splits
-from dataset.augmentation import make_augmentation
-from dataset.slices import ADNISliceDataset
-from dataset.manifests import load_fold, load_holdout, manifest_sha256
+from adni_data import splits as adni_splits
+from adni_data.augmentation import make_augmentation
+from adni_data.slices import ADNISliceDataset
+from adni_data.manifests import load_fold, load_holdout, manifest_sha256
 import test_adni_splits as split_tests
 
 

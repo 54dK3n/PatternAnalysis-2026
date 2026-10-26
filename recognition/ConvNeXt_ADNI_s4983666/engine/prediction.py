@@ -29,8 +29,8 @@ import sys
 import torch
 
 from dataset import load_fold, load_holdout, make_loader
-from dataset.acquisition import SHARED_PERIOD_START, acquisition_info
-from dataset.preprocessing import checkpoint_preprocessing
+from adni_data.acquisition import SHARED_PERIOD_START, acquisition_info
+from adni_data.preprocessing import checkpoint_preprocessing
 from evaluation.calibration import (apply_platt, choose_referral_threshold, fit_platt,
                                     referral_decision)
 from evaluation.inference import predict_slices, score_slices

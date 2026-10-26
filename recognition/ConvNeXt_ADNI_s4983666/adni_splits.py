@@ -3,7 +3,7 @@
 Use ``python3 adni_splits.py --help`` for command-line options.
 """
 
-from dataset.splits import main
+from adni_data.splits import main
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ def code_fingerprints():
     """Identify the exact source files used, even outside a Git checkout."""
     root = Path(__file__).resolve().parents[1]
     sources = [root / name for name in ("adni_splits.py", "train.py", "predict.py", "modules.py", "dataset.py", "audit_preprocessing.py")]
-    for package in ("models", "dataset", "engine", "evaluation", "utils"):
+    for package in ("models", "adni_data", "engine", "evaluation", "utils"):
         sources.extend((root / package).rglob("*.py"))
     return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(sources)}

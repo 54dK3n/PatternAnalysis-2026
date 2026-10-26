@@ -28,7 +28,7 @@ import statistics
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from dataset.acquisition import SHARED_PERIOD_START, acquisition_info  # noqa: E402
+from adni_data.acquisition import SHARED_PERIOD_START, acquisition_info  # noqa: E402
 from evaluation.metrics import binary_metrics  # noqa: E402
 
 UNITS = ("slice", "scan", "patient")

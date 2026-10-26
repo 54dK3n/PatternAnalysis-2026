@@ -5,9 +5,9 @@ from pathlib import Path
 import sys
 
 from dataset import load_fold
-from dataset.preprocessing import (add_preprocessing_arguments, fit_training_crop,
+from adni_data.preprocessing import (add_preprocessing_arguments, fit_training_crop,
                                    prepare_scans, preprocessing_from_args)
-from dataset.slices import ADNISliceDataset
+from adni_data.slices import ADNISliceDataset
 from utils.artifacts import code_fingerprints, validate_output, write_json
 from utils.preprocessing_artifacts import export_preprocessing_audit
 

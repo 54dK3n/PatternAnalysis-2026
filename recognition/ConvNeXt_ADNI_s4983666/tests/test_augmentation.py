@@ -5,7 +5,7 @@ import unittest
 
 from PIL import Image
 
-from dataset.augmentation import AUGMENTATION_NAMES, AugmentationConfig, augment_image, make_augmentation
+from adni_data.augmentation import AUGMENTATION_NAMES, AugmentationConfig, augment_image, make_augmentation
 
 
 def gradient_image(width: int = 32, height: int = 24) -> Image.Image:

@@ -1,6 +1,6 @@
 """Train one randomly initialized model on one frozen development fold.
 
-Data roles (see dataset/manifests.py; every patient is in exactly one role):
+Data roles (see adni_data/manifests.py; every patient is in exactly one role):
 
 1. ``train`` slices update the weights.
 2. ``val`` patients are scored after every epoch so the learning curves can be
@@ -24,10 +24,10 @@ import torch
 from torch import nn
 
 from dataset import load_fold, make_loader
-from dataset.augmentation import AUGMENTATION_NAMES, make_augmentation
-from dataset.preprocessing import (add_preprocessing_arguments, fit_training_crop, prepare_scans,
+from adni_data.augmentation import AUGMENTATION_NAMES, make_augmentation
+from adni_data.preprocessing import (add_preprocessing_arguments, fit_training_crop, prepare_scans,
                                    preprocessing_from_args)
-from dataset.sampling import SAMPLING_NAMES, sampling_weights
+from adni_data.sampling import SAMPLING_NAMES, sampling_weights
 from engine.ema import ModelEMA
 from engine.scheduling import learning_rate
 from evaluation.inference import evaluate

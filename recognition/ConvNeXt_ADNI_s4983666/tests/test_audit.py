@@ -19,7 +19,7 @@ from PIL import Image
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "adni_splits.py"
-IMPLEMENTATION = SCRIPT.parent / "dataset" / "splits.py"
+IMPLEMENTATION = SCRIPT.parent / "adni_data" / "splits.py"
 
 
 class SourceAuditTests(unittest.TestCase):

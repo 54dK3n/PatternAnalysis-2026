@@ -113,13 +113,15 @@ style does not predict the diagnosis before any deployment.
 ```text
 ConvNeXt_ADNI_s4983666/
 |-- modules.py            # Model interface (PyTorch only): models/convnext.py, models/cnn.py
-|-- dataset.py            # Data interface: dataset/ (splits, manifests, slices, augmentation)
+|-- dataset.py            # Data interface imported by train.py / predict.py: adni_data/ (splits, manifests, slices, augmentation)
 |-- train.py              # Training entry point (engine/training.py)
 |-- predict.py            # Inference, calibration and test entry point (engine/prediction.py)
 |-- adni_splits.py        # Audit / prepare / verify the patient-level split
 |-- audit_preprocessing.py
 |-- probe_acquisition.py  # Acquisition-style probe (docs/ACQUISITION_CONFOUND.md)
 |-- explain_gradcam.py    # Grad-CAM figures on validation patients
+|-- models/               # ConvNeXt and SmallCNN implementations (behind modules.py)
+|-- adni_data/            # Data implementation (behind dataset.py)
 |-- engine/               # Training loop, EMA, LR schedule, prediction
 |-- evaluation/           # Metrics, inference, calibration, reporting, resource profiling
 |-- utils/                # Runtime/seeding, output files, plots, training controls
@@ -166,6 +168,13 @@ algorithms [7] and writes `config.json` (all options, package versions, GPU,
 manifest and source-code hashes). Bit-exact results are only expected on the
 same hardware and software versions.
 
+After all experiments were finished, the data package was renamed from
+`dataset/` to `adni_data/` so that `import dataset` resolves to `dataset.py`.
+Before the rename, the package shadowed that file. Only module names and
+imports changed, not the code inside them. The `code_sha256` paths recorded in
+the configs of earlier runs therefore read `dataset/...`. Checkpoints store
+tensors only (`weights_only=True`), so they load unchanged.
+
 ## Data
 
 The course copy at `/home/groups/comp3710/ADNI` has 680 patients (221 AD, 459 NC),
@@ -189,6 +198,33 @@ vs 1.7 for NC). Within fold 1, 381 patients train the model (the fold's `train` 
 epoch; the checkpoint is always the last epoch. `adni_splits.py verify` (run automatically by `train.py` and `predict.py`)
 fails if any patient, scan, file or pixel hash crosses a role boundary. See
 [docs/DATA_PROTOCOL.md](docs/DATA_PROTOCOL.md).
+An independent re-check of the frozen manifests (2026-10-26) found the
+following:
+
+* No patient ID, scan ID, file hash or decoded-pixel hash is shared between
+  development, calibration and test.
+* No patient appears in the validation set of two folds, and no fold's
+  training or inner-early-stop patients appear in its own validation set.
+* All 30,520 slices have distinct pixel hashes, so no image is duplicated
+  under another patient.
+* No patient has more than one label.
+
+These checks have limits:
+
+* Hashes detect exact copies only, not near-duplicates.
+* The skull stripping and slice extraction were done upstream by the course
+  and cannot be audited.
+
+**Test-set use.** The test set was scored once with the frozen model, Platt
+parameters and τ (Slurm 659813). Everything computed on test afterwards
+reuses those saved predictions: the bootstrap, McNemar, patient-level Platt,
+the `tau_NC` sweep and the failure-case review. None of it changed
+the primary model, its threshold or the recommendation. The one later
+training run, the `scanner` SmallCNN control, used only
+development patients, and its threshold was fitted on calibration patients.
+Its test numbers, like all post-hoc test results, are not an independent
+estimate. A choice informed by them, such as a `tau_NC` value, would need new
+data to evaluate.
 
 **Preprocessing.** Slices keep their native 240×256 size and are mapped to
 [-1, 1] with fixed constants, so no statistic is estimated from any split.
@@ -203,6 +239,18 @@ regulariser), random-resized crop covering 85-100% of the area [6], rotation up 
 10 degrees, translation up to 5%, and intensity gain/gamma within ±10%/±15%. All three context
 channels receive the same transform. Vertical flips and large rotations are not
 used because they distort the anatomy further.
+The `scanner` profile (screened in Round 4 and used in the post-hoc SmallCNN
+control) is selected *instead of* `strong`, not stacked on top of it, but it
+keeps every `strong` operation (same flip, crop, rotation and translation) and
+changes or adds the following, applied in this order to each training image:
+intensity gain widened from ±10% to ±20% and gamma from ±15% to ±30%; a smooth
+multiplicative bias field (a random 4×4 grid of factors drawn from [0.7, 1],
+bicubically upsampled to the image; applied to every image); with probability
+0.3 an unsharp mask (radius 1 px, strength 50-150%), otherwise a Gaussian blur
+with radius drawn from [0, 1] px; and zero-mean Gaussian noise added inside the
+head only (standard deviation drawn from [0, 3%] of the intensity range; applied
+to every image). The black background stays zero and all three context channels
+receive the same draw (`adni_data/augmentation.py`).
 
 ## Usage
 
@@ -726,48 +774,76 @@ automated patients, applied unchanged to the 136 test patients):
 
 **Post-hoc comparison: Slice-level vs Patient-level Platt calibration (not in `PREDECLARATION.txt`).**
 Because final referral decisions are made per patient, we directly test whether
-`strong` SmallCNN's elevated post-Platt patient ECE (`0.112`) stems from
-slice-level Platt fitting by fitting Platt scaling `(a_pat, b_pat)` and the
-90%-accuracy referral threshold `tau_pat` **directly on the 68 calibration
-patients' aggregated scores** (evaluating both each patient's mean slice logit
-and the logit of each patient's mean uncalibrated slice probability, then
-applying `(a_pat, b_pat, tau_pat)` unchanged to the 136 test patients):
+`strong` SmallCNN's elevated patient ECE (`0.112`) is an artifact of slice-level
+Platt fitting by fitting Platt scaling `(a_pat, b_pat)` and the 90%-accuracy
+referral threshold `tau_pat` **directly on the 68 calibration patients'
+aggregated scores** (each patient's mean slice logit, "mean-logit", or the
+logit of each patient's mean uncalibrated slice probability, "mean-prob"), then
+applying `(a_pat, b_pat, tau_pat)` unchanged to the 136 test patients. Both
+aggregations were computed for pretrained ConvNeXt and `strong` SmallCNN; for
+scratch ConvNeXt only mean-logit and for `scanner` SmallCNN only mean-prob were
+computed in this post-hoc analysis, so the other two rows are missing rather
+than hidden. Test FN / FP and AD recall are not separate measurements: with 44
+AD and 92 NC test patients, the reported accuracy and balanced accuracy fix both
+error counts uniquely.
 
-| Five-fold ensemble & calibration unit | Fitted `a / b` | `tau` | Calibration cov. (auto. acc.) | Test patient acc. (bal. acc.) | Test patient ECE | Test cov. (`accepted/136`) | Test auto. acc. |
+ConvNeXt ensembles:
+
+| Calibration | Fitted `a / b` | `tau` | Calibration cov. (auto. acc.) | Test patient acc. (bal. acc.) | Test FN / FP (AD recall) | Test patient ECE | Test cov. (auto. acc.) |
 |---|---|---:|---|---|---|---|---|
-| **ConvNeXt-Tiny, ImageNet-1k** — Uncalibrated | `1.000 / 0.000` | — | — | 0.882 (0.854) | 0.062 | — | — |
-| — Slice-fitted Platt (pre-declared) | `0.246 / +0.193` | 0.626 | 0.941 (0.906) | **0.882 (0.866)** | 0.049 | 0.875 (`119/136`) | **0.924** (`110/119`) |
-| — Patient-mean-logit Platt (post-hoc) | `0.309 / -0.519` | 0.611 | 0.956 (0.908) | **0.882 (0.842)** | **0.043** | 0.934 (`127/136`) | 0.890 (`113/127`) |
-| — Patient-mean-prob Platt (post-hoc) | `0.549 / -0.241` | 0.561 | 0.956 (0.908) | 0.875 (0.836) | **0.041** | 0.941 (`128/136`) | 0.898 (`115/128`) |
-| **ConvNeXt-Tiny, scratch** — Uncalibrated | `1.000 / 0.000` | — | — | 0.809 (0.782) | 0.076 | — | — |
-| — Slice-fitted Platt (pre-declared) | `0.354 / +0.500` | 0.836 | 0.397 (0.926) | 0.801 (0.806) | 0.070 | 0.346 (`47/136`) | 0.915 (`43/47`) |
-| — Patient-mean-logit Platt (post-hoc) | `0.449 / -0.324` | 0.682 | 0.735 (0.900) | 0.801 (0.752) | **0.047** | 0.831 (`113/136`) | 0.858 (`97/113`) |
-| **SmallCNN (`strong`)** — Uncalibrated | `1.000 / 0.000` | — | — | 0.824 (0.751) | 0.073 | — | — |
-| — Slice-fitted Platt (pre-declared) | `0.957 / +0.813` | 0.563 | 0.897 (0.902) | 0.875 (0.860) | 0.112 | 0.912 (`124/136`) | 0.903 (`112/124`) |
-| — Patient-mean-logit Platt (post-hoc) | `1.083 / +0.215` | 0.638 | 0.897 (0.902) | 0.846 (0.785) | **0.038** | 0.868 (`118/136`) | 0.898 (`106/118`) |
-| — Patient-mean-prob Platt (post-hoc) | `1.212 / +0.174` | 0.632 | 0.853 (0.914) | 0.838 (0.774) | **0.055** | 0.890 (`121/136`) | 0.884 (`107/121`) |
-| **SmallCNN (`scanner`, post-hoc)** — Slice-fitted Platt | `1.071 / -0.063` | 0.508 | 1.000 (0.912) | 0.838 (0.821) | 0.078 | 0.993 (`135/136`) | 0.837 (`113/135`) |
-| — Patient-mean-prob Platt (post-hoc) | `1.403 / -0.753` | 0.579 | 0.941 (0.906) | 0.838 (0.786) | **0.057** | 0.926 (`126/136`) | 0.865 (`109/126`) |
+| **Pretrained**, uncalibrated | `1.000 / 0.000` | — | — | 0.882 (0.854) | 10 / 6 (0.773) | 0.062 | — |
+| Pretrained, slice-fitted Platt (pre-declared) | `0.246 / +0.193` | 0.626 | 0.941 (0.906) | **0.882 (0.866)** | **8 / 8 (0.818)** | 0.049 | 0.875 (`119/136`, **0.924**) |
+| Pretrained, patient mean-logit Platt (post-hoc) | `0.309 / -0.519` | 0.611 | 0.956 (0.908) | 0.882 (0.842) | 12 / 4 (0.727) | **0.043** | 0.934 (`127/136`, 0.890) |
+| Pretrained, patient mean-prob Platt (post-hoc) | `0.549 / -0.241` | 0.561 | 0.956 (0.908) | 0.875 (0.836) | 12 / 5 (0.727) | **0.041** | 0.941 (`128/136`, 0.898) |
+| **Scratch**, uncalibrated | `1.000 / 0.000` | — | — | 0.809 (0.782) | 13 / 13 (0.705) | 0.076 | — |
+| Scratch, slice-fitted Platt (pre-declared) | `0.354 / +0.500` | 0.836 | 0.397 (0.926) | 0.801 (0.806) | 8 / 19 (0.818) | 0.070 | 0.346 (`47/136`, 0.915) |
+| Scratch, patient mean-logit Platt (post-hoc) | `0.449 / -0.324` | 0.682 | 0.735 (0.900) | 0.801 (0.752) | 17 / 10 (0.614) | **0.047** | 0.831 (`113/136`, 0.858) |
 
-* **Direct verification of the ECE explanation:** Fitting Platt scaling at the
-  patient level cuts test patient ECE across all four ensembles (`0.049 -> 0.043/0.041`
-  for pretrained ConvNeXt, `0.070 -> 0.047` for scratch ConvNeXt, `0.078 -> 0.057`
-  for `scanner` SmallCNN, and **`0.112 -> 0.038`** for `strong` SmallCNN),
-  confirming empirically that `strong` SmallCNN's elevated post-Platt patient
-  ECE (`0.112`) was caused by applying slice-fitted Platt parameters
-  (`b = +0.813`) to variance-compressed patient averages rather than by an
-  intrinsic inability of SmallCNN to calibrate at the patient level.
-* **Threshold stability of pretrained ConvNeXt vs `strong` SmallCNN:** Without
-  the `53.5%` slice-prior intercept boost (`b = +0.813`), `strong` SmallCNN's
-  test patient accuracy settles at `0.846` (`115/136`, balanced accuracy `0.785`;
-  `0.838` under prob-logit), whereas pretrained ConvNeXt holds `0.882` (`120/136`)
-  under both slice-fitted and patient-mean-logit Platt calibration.
-* **Finite-sample trade-off on 68 calibration patients:** Fitting all three
-  patient-level parameters (`a_pat, b_pat, tau_pat`) on the same 68 calibration
-  patients yields slightly optimistic `tau_pat` values on calibration, leaving
-  automated test accuracy at `89.0%-89.8%` for pretrained ConvNeXt and `strong`
-  SmallCNN (while improving `scanner` SmallCNN's automated test accuracy from
-  `83.7%` to `86.5%`), reinforcing the need for a larger calibration cohort.
+SmallCNN ensembles:
+
+| Calibration | Fitted `a / b` | `tau` | Calibration cov. (auto. acc.) | Test patient acc. (bal. acc.) | Test FN / FP (AD recall) | Test patient ECE | Test cov. (auto. acc.) |
+|---|---|---:|---|---|---|---|---|
+| **`strong`**, uncalibrated | `1.000 / 0.000` | — | — | 0.824 (0.751) | 20 / 4 (0.545) | 0.073 | — |
+| `strong`, slice-fitted Platt (pre-declared) | `0.957 / +0.813` | 0.563 | 0.897 (0.902) | 0.875 (0.860) | 8 / 9 (0.818) | 0.112 | 0.912 (`124/136`, 0.903) |
+| `strong`, patient mean-logit Platt (post-hoc) | `1.083 / +0.215` | 0.638 | 0.897 (0.902) | 0.846 (0.785) | 17 / 4 (0.614) | **0.038** | 0.868 (`118/136`, 0.898) |
+| `strong`, patient mean-prob Platt (post-hoc) | `1.212 / +0.174` | 0.632 | 0.853 (0.914) | 0.838 (0.774) | 18 / 4 (0.591) | **0.055** | 0.890 (`121/136`, 0.884) |
+| **`scanner`** (post-hoc model), slice-fitted Platt | `1.071 / -0.063` | 0.508 | 1.000 (0.912) | 0.838 (0.821) | 10 / 12 (0.773) | 0.078 | 0.993 (`135/136`, 0.837) |
+| `scanner`, patient mean-prob Platt (post-hoc) | `1.403 / -0.753` | 0.579 | 0.941 (0.906) | 0.838 (0.786) | 16 / 6 (0.636) | **0.057** | 0.926 (`126/136`, 0.865) |
+
+Three findings emerge from this patient-level calibration control:
+1. **Consistent with the ECE explanation:** Fitting Platt scaling at the
+   patient level matches the `32.4%` patient AD prior and the variance of
+   patient-averaged scores, reducing test patient ECE for every ensemble
+   (`0.049 -> 0.043/0.041` for pretrained ConvNeXt, `0.070 -> 0.047` for scratch
+   ConvNeXt, `0.078 -> 0.057` for `scanner` SmallCNN, and **`0.112 -> 0.038`**
+   for `strong` SmallCNN). This supports the reading that `strong` SmallCNN's
+   elevated post-Platt patient ECE (`0.112`) came from applying slice-fitted
+   Platt parameters (`b = +0.813`) to patient averages rather than from an
+   inability of `SmallCNN` to produce calibrated patient probabilities.
+2. **Better-calibrated confidence does not mean fewer missed AD patients:**
+   Matching the lower patient AD prior moves every ensemble's decision boundary
+   towards NC, so false positives fall and false negatives rise. For the
+   pretrained ConvNeXt (mean-logit) total accuracy stays at **0.882**
+   (`120/136`) only because 4 fewer NC patients called AD (`8 -> 4`) offset 4
+   more missed AD patients (`8 -> 12`): AD recall drops from **0.818 to 0.727**.
+   Unchanged total accuracy therefore shows a different trade-off between the
+   two error types, not more stable decisions. The other ensembles move the
+   same way, with larger losses in AD recall (`strong` SmallCNN `0.818 -> 0.614`,
+   `8 -> 17` FN, total `0.875 -> 0.846`; scratch ConvNeXt `0.818 -> 0.614`;
+   `scanner` SmallCNN `0.773 -> 0.636`).
+3. **Finite-sample trade-off of fitting `(a, b, tau)` on the same 68 patients:**
+   When all three parameters (`a_pat, b_pat, tau_pat`) are fitted on the same 68
+   calibration patients (`22 AD, 46 NC`), `tau_pat` is slightly optimistic on
+   calibration and accepts more test patients: for the pretrained ConvNeXt,
+   coverage rises from `87.5%` to `93.4%` but automated test accuracy falls from
+   **92.4% to 89.0%** (mean-logit; `89.8%` mean-prob), just below the 90%
+   target. Only for `scanner` SmallCNN does patient-level Platt raise automated
+   test accuracy (`83.7%` with `1/136` referred to `86.5%` with `10/136`).
+
+These patient-level variants remain post-hoc and do not replace the
+pre-declared operating point (slice-fitted Platt scaling, `tau = 0.626`). A larger
+calibration cohort, and ideally an AD-recall constraint fitted alongside `tau`, would
+be needed before adopting patient-level calibration.
 
 **Post-hoc sensitivity analysis: asymmetric referral (`tau_NC > tau_AD`, not in `PREDECLARATION.txt`).**
 The locked test evaluation above used the pre-declared symmetric rule `tau_AD = tau_NC = 0.626`.

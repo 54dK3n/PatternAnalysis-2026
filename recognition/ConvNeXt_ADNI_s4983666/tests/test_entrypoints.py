@@ -54,8 +54,8 @@ class EntrypointTests(unittest.TestCase):
                     return None
 
             sys.meta_path.insert(0, BlockTrainingImports())
-            import dataset
-            from dataset import splits
+            import adni_data
+            from adni_data import splits
 
             command = sys.argv[1]
             sys.argv = ["adni_splits.py", command, "--help"]
@@ -78,7 +78,7 @@ class EntrypointTests(unittest.TestCase):
 
         fingerprints = code_fingerprints()
         expected = {"train.py", "predict.py", "adni_splits.py"}
-        for package in ("models", "dataset", "engine", "evaluation", "utils"):
+        for package in ("models", "adni_data", "engine", "evaluation", "utils"):
             directory = ROOT / package
             self.assertTrue(directory.is_dir(), package)
             sources = list(directory.rglob("*.py"))
@@ -93,17 +93,14 @@ class EntrypointTests(unittest.TestCase):
                 self.assertTrue(resolved.is_relative_to(ROOT))
                 self.assertEqual(digest, hashlib.sha256(resolved.read_bytes()).hexdigest())
 
-    def test_dataset_package_exports_match_dataset_facade(self):
-        """Importing dataset must expose the same public API as dataset.py."""
-        import importlib.util
+    def test_dataset_module_is_the_course_facing_loader(self):
+        """`import dataset` must resolve to dataset.py and expose the adni_data package API."""
+        import adni_data
         import dataset
 
-        spec = importlib.util.spec_from_file_location("dataset_facade", ROOT / "dataset.py")
-        facade = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(facade)
-        self.assertEqual(dataset.__all__, facade.__all__)
-        for symbol in facade.__all__:
-            self.assertIs(getattr(dataset, symbol), getattr(facade, symbol))
+        self.assertEqual(Path(dataset.__file__).resolve(), (ROOT / "dataset.py").resolve())
+        for symbol in dataset.__all__:
+            self.assertIs(getattr(dataset, symbol), getattr(adni_data, symbol))
 
 
 if __name__ == "__main__":

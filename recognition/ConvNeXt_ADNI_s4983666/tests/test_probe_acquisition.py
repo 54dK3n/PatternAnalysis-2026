@@ -7,7 +7,7 @@ import unittest
 
 import torch
 
-from dataset.acquisition import acquisition_info
+from adni_data.acquisition import acquisition_info
 import probe_acquisition as probe
 import test_adni_splits as split_fixture
 

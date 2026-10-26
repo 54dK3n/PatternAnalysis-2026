@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dataset.preprocessing import apply_preprocessing, canonical_image, crop_box
+from adni_data.preprocessing import apply_preprocessing, canonical_image, crop_box
 from utils.artifacts import write_csv, write_json
 
 

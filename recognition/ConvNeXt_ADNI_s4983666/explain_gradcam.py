@@ -27,8 +27,8 @@ import sys
 import torch
 
 from dataset import load_fold, make_loader
-from dataset.acquisition import SHARED_PERIOD_START, acquisition_info
-from dataset.preprocessing import checkpoint_preprocessing
+from adni_data.acquisition import SHARED_PERIOD_START, acquisition_info
+from adni_data.preprocessing import checkpoint_preprocessing
 from engine.prediction import load_checkpoint
 from evaluation.gradcam import grad_cam, outside_share, target_layer
 from evaluation.inference import predict_slices, score_slices

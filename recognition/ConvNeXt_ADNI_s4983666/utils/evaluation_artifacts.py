@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from dataset.slices import ADNISliceDataset
+from adni_data.slices import ADNISliceDataset
 from utils.artifacts import write_csv, write_json
 
 
