@@ -46,5 +46,5 @@
 /recognition/ConvNeXt_ADNI_s4983666/**/*.pkl
 
 # The supplied coursework brief is reference material, not project source.
-/recognition/ConvNeXt_ADNI_s4983666/**/COMP3710_Report_2026_draft_v2.pdf
-COMP3710_Report_2026_draft_v2.*.pdf
+/recognition/ConvNeXt_ADNI_s4983666/**/COMP3710_Report_2026*.pdf
+COMP3710_Report_2026*.pdf

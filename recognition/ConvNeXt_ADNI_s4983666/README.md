@@ -135,10 +135,12 @@ ConvNeXt_ADNI_s4983666/
 
 ## Dependencies and reproducibility
 
-Rangpur runs used Python 3.11.15, PyTorch 2.13.0 (CUDA build 13.0), Pillow
-12.3.0 and Matplotlib 3.11.1 on an NVIDIA A100-PCIE-40GB. The code needs no
-torchvision, NumPy or scikit-learn; `config/requirements*.txt` list the minimal
-packages (install a PyTorch build that matches your GPU driver).
+The code requires only Python, PyTorch, Pillow and Matplotlib (no torchvision,
+NumPy or scikit-learn):
+
+* **Rangpur A100 server environment (used for all reported experiments and recorded in every run's `config.json`):** Python `3.11.15`, `torch==2.13.0` (cluster `CUDA 13.0` build), `Pillow==12.3.0`, and `matplotlib==3.11.1` on an NVIDIA `A100-PCIE-40GB`.
+* **Local CPU reference environment (`config/requirements-train.txt`, verified with Python `3.12.14`):** `Pillow==12.3.0`, `torch==2.6.0`, and `matplotlib==3.9.4` (standard PyPI wheels for running the synthetic test suite locally; on a GPU server, install the PyTorch build matching the cluster's CUDA driver).
+* **Run outputs outside Git:** Per repository rules, datasets, frozen patient manifests, checkpoints, and run/analysis output files cited below (`runs/*`, `PREDECLARATION.txt`, `results/posthoc_cnn_scanner_20261021/`, `results/failure_evidence_20261026/`, and JSON summaries) are stored on Rangpur (`$HOME/comp3710/`) and are not committed to Git.
 
 ```bash
 python3 -m pip install -r config/requirements-train.txt
@@ -441,7 +443,7 @@ are AD and all 547 NC scans were acquired 2017-2021 with accelerated sequences.
 
 ![Acquisition examples](figures/adni/acquisition_examples.png)
 
-*Random slices per diagnosis and acquisition period (year and sequence from the metadata file name; IDs removed). The periods are not obviously distinguishable by eye.*
+*Figure 4. Random slices per diagnosis and acquisition period (year and sequence from the metadata file name; IDs removed). The periods are not obviously distinguishable by eye.*
 
 The diagnosis is therefore entangled with acquisition period and scanner. AD scans
 acquired 2017-2021 are misclassified far more often (ConvNeXt scan error 0.67
@@ -544,14 +546,14 @@ group, fold 5 validation scans:
 |---|---|---|
 | ![](figures/adni/gradcam_means_scratch_fold5.png) | ![](figures/adni/gradcam_means_pretrained_fold5.png) | ![](figures/adni/gradcam_means_cnn_fold5.png) |
 
-*Figure 4. Mean mid-sagittal input slice (top) and mean Grad-CAM heatmap (bottom) per diagnosis × acquisition period on fold-5 validation scans for scratch ConvNeXt-Tiny, ImageNet-1k ConvNeXt-Tiny, and SmallCNN.*
+*Figure 5. Mean mid-sagittal input slice (top) and mean Grad-CAM heatmap (bottom) per diagnosis × acquisition period on fold-5 validation scans for scratch ConvNeXt-Tiny, ImageNet-1k ConvNeXt-Tiny, and SmallCNN.*
 
 Individual scans for the ImageNet-initialised model (two most confident
 correct and two most confident wrong per group; input slice, then Grad-CAM):
 
 ![Grad-CAM cases](figures/adni/gradcam_cases_pretrained_fold5.png)
 
-*Figure 5. Grad-CAM of the ImageNet-initialised model on single fold-5 validation scans: two most confident correct and two most confident wrong scans per subgroup (input slice above, heatmap below; IDs removed).*
+*Figure 6. Grad-CAM of the ImageNet-initialised model on single fold-5 validation scans: two most confident correct and two most confident wrong scans per subgroup (input slice above, heatmap below; IDs removed).*
 
 * **Scratch ConvNeXt-Tiny** (`gradcam_means_scratch_fold5.png`) scatters its
   attribution across the black corners and frame borders (`0.72-0.83` of map
@@ -582,7 +584,7 @@ correct and two most confident wrong per group; input slice, then Grad-CAM):
 ### Final test (136 patients, scored once)
 
 The model, the comparisons and the calibration procedure were declared before
-the test job (Slurm 659813, `PREDECLARATION.txt` 2026-10-14T14:57+10:00):
+the test job (Slurm 659813, `PREDECLARATION.txt` 2026-10-14T14:57+10:00, stored on Rangpur outside Git):
 primary model = the five round-6 fold models averaged at the logit level;
 the scratch ConvNeXt-Tiny and CNN fold ensembles are reported alongside. Each
 ensemble fits Platt scaling and its referral threshold on the 68 calibration
@@ -657,7 +659,7 @@ Scans by acquisition period (test: 122 AD scans 2011-2016 across 28 AD patients;
 
 ![Per-fold validation accuracy of the single fold models and test accuracy of the fold ensembles](figures/fold_accuracy.png)
 
-*Figure 6. Per-fold validation accuracy of single-fold models (bars) and test accuracy of the five-fold ensembles after Platt scaling (stars); dotted line marks the 0.80 coursework target.*
+*Figure 7. Per-fold validation accuracy of single-fold models (bars) and test accuracy of the five-fold ensembles after Platt scaling (stars); dotted line marks the 0.80 coursework target.*
 
 **How certain are these test differences?** 136 test patients is a small
 sample (1 patient = 0.74 percentage points). Patient-level 95% intervals from
@@ -878,10 +880,10 @@ alone.
 
 ![Left: slice reliability after Platt scaling. Middle and right: patient confidence of correct and wrong test predictions with the frozen tau](figures/test_calibration.png)
 
-*Figure 7. Left: slice reliability on test after Platt scaling. Middle and right: patient confidence distributions for correct and wrong test predictions of the primary ConvNeXt and SmallCNN ensembles with the frozen threshold τ.*
+*Figure 8. Left: slice reliability on test after Platt scaling. Middle and right: patient confidence distributions for correct and wrong test predictions of the primary ConvNeXt and SmallCNN ensembles with the frozen threshold τ.*
 
 **Does confidence separate right from wrong?** Patient level, after Platt
-scaling (`posthoc_patient_analysis.json`). AUROC of confidence = probability
+scaling (`posthoc_patient_analysis.json`, stored on Rangpur). AUROC of confidence = probability
 that a correct patient receives higher confidence than a wrong one; AURC =
 area under the risk-coverage curve (lower is better):
 
@@ -893,7 +895,7 @@ area under the risk-coverage curve (lower is better):
 
 ![Patient risk-coverage curves on test with the operating point of the frozen tau](figures/test_risk_coverage.png)
 
-*Figure 8. Patient risk-coverage curves on test with the operating point of the frozen threshold τ for each five-fold ensemble.*
+*Figure 9. Patient risk-coverage curves on test with the operating point of the frozen threshold τ for each five-fold ensemble.*
 
 * The pretrained ensemble ranks its own errors best: most of its 16 unreferred
   patient errors (8 FP and 8 FN across the 136 test patients) sit at low
@@ -920,7 +922,7 @@ pre-declared five-fold baseline kept `strong` augmentation, folds 1-3 of
 epochs, LR 1e-3, weight decay 1e-4, EMA 0.999, final-epoch weights, seed
 `3710 + fold`; Slurm 681962, all five checkpoints replaying bit-for-bit) and
 evaluated through the identical five-fold ensemble calibration and test pipeline
-(Slurm 681963; `results/posthoc_cnn_scanner_20261021/`). This control was not
+(Slurm 681963; `results/posthoc_cnn_scanner_20261021/`, stored on Rangpur outside Git). This control was not
 used to select or alter the primary model or its threshold.
 
 Development, five folds, same validation patients (mean ± sd):
@@ -966,21 +968,26 @@ Test, 136 patients, same pipeline (calibrated unless marked):
 
 ## Failure case autopsy
 
-The five most confident slice-level errors of the primary ensemble on the
-test set, as exported by `predict.py` (one slice per patient; titles give the
-slice probability and the patient-level probability and decision; IDs removed).
-All five come from scans acquired 2017-2021. The three false-positive slices
+To address the 3-5 representative failure-case requirement while showing the
+full context of the referral rule, **Cases 1-5** below are the **five primary
+failure cases** (the five most confident slice-level errors of the primary
+ensemble on the test set, exported by `predict.py`: 3 false positives and 2
+false negatives; one slice per patient, IDs removed), while **Cases 6-10** (the
+four borderline referred patients from *Figure 2* plus the single misclassified
+`2011-2016 AD` patient) and the whole-cohort analyses (*Figures 11-13*) are
+included as supplementary context.
+All five primary failure slices come from scans acquired 2017-2021. The three false-positive slices
 belong to NC patients that are also automated as AD at patient level; the two
 false-negative slices belong to AD patients automated as NC, i.e. to the
 confident misses in the AD 2017-2021 group described above.
 
 ![Most confident test failures](figures/adni/test_failures.png)
 
-*Figure 9. Five most confident slice-level test failures of the primary ensemble (IDs removed). Titles report slice p(AD), patient-level p(AD) and decision.*
+*Figure 10. Five most confident slice-level test failures of the primary ensemble (Cases 1-5; IDs removed). Titles report slice p(AD), patient-level p(AD) and decision.*
 
-Cross-model comparison of the five most confident slice-level errors (Cases 1-5,
-*Figure 9*), the four borderline referred patients (Cases 6-9, bottom row of
-*Figure 2*), and the single misclassified `2011-2016 AD` patient (Case 10), from
+Cross-model comparison of the five primary slice-level errors (Cases 1-5,
+*Figure 10*) and the five supplementary cases—the four borderline referred patients (Cases 6-9, bottom row of
+*Figure 2*) and the single misclassified `2011-2016 AD` patient (Case 10)—from
 `test_failure_cases.csv`, `scan_predictions.csv` and `test_patient_predictions.csv`
 (thresholds: pretrained τ = 0.626, scratch τ = 0.836, SmallCNN τ = 0.563):
 
@@ -998,14 +1005,14 @@ Cross-model comparison of the five most confident slice-level errors (Cases 1-5,
 | 10 (pre-2017 FN) | 2011-16 AD | 6 | — (scan p: 0.29-0.89) | 0.47, REFER | 0.45, REFER | 0.31, NC (wrong) |
 
 **Is the pattern more than five anecdotes?** Ten hand-picked cases cannot show
-a pattern, so the same grouping was applied to every patient. *Figure 9a* shows
+a pattern, so the same grouping was applied to every patient. *Figure 11* shows
 all 136 test patients. Before referral, the primary model gets 16 wrong. Fifteen
 are from 2017-2021: all 8 false positives (NC) and 7 of the 8 false negatives
 (AD). Sixteen of the 17 referred patients are also from 2017-2021 (10 NC, 6 AD).
 
 ![Test patients by group](figures/adni/test_patient_groups.png)
 
-*Figure 9a. Calibrated patient p(AD) of all 136 test patients for the primary
+*Figure 11. Calibrated patient p(AD) of all 136 test patients for the primary
 ensemble, by diagnosis, acquisition period and enrolment band (subject number
 < 6000 = enrolled before ADNI-3). Crosses: wrong before referral; grey band:
 referred.*
@@ -1014,7 +1021,7 @@ The test subgroups are small (6 of 25 vs 2 of 67), so the same grouping was
 repeated on the 476 development patients. Each was scored out-of-fold by the
 fold model that never trained on it, at the raw 0.5 threshold. These patients
 were never used to choose this analysis. Patient error rate, with Wilson 95%
-CI and Fisher's exact test (`results/failure_evidence_20261026/`):
+CI and Fisher's exact test (`results/failure_evidence_20261026/`, stored on Rangpur outside Git):
 
 | Group | Dev. OOF, pretrained | Dev. OOF, scratch | Dev. OOF, SmallCNN | Test, pretrained ensemble |
 |---|---|---|---|---|
@@ -1043,11 +1050,11 @@ an artefact of the 16 test errors.
   atrophy. The metadata has no age field, so this is a hypothesis, not a
   finding.
 
-**What the images can and cannot show.** *Figure 9* shows the single slice
+**What the images can and cannot show.** *Figure 10* shows the single slice
 with the most confident wrong prediction for each patient, not a
 representative slice. Two further views reduce that selection bias.
 
-* *Figure 9b* plots the calibrated p(AD) of every slice of every scan for all
+* *Figure 12* plots the calibrated p(AD) of every slice of every scan for all
   16 wrong test patients.
   * Some errors are consistent across the whole scan. Case 4 stays below 0.25
     on all 20 slices, and two NC false positives stay above 0.6 on almost every
@@ -1059,7 +1066,7 @@ representative slice. Two further views reduce that selection bias.
     on each side of 0.5 (median within-scan range 0.22). One slice therefore
     says little about the patient, and averaging over all slices is what makes
     patient-level decisions more stable.
-* *Figure 9c* shows the first, middle and last slice of the scan behind each
+* *Figure 13* shows the first, middle and last slice of the scan behind each
   confident error. The 20 slices appear to cross the midline, so the outer slices show
   the lateral ventricle of each hemisphere and the middle slice shows the
   midline. Apparent ventricle size therefore changes with slice position as
@@ -1072,15 +1079,15 @@ compared between correct and wrong patients.
 
 ![Slice profiles of wrong test patients](figures/adni/failure_profiles.png)
 
-*Figure 9b. Calibrated slice p(AD) along each scan (one line per scan, legend
+*Figure 12. Calibrated slice p(AD) along each scan (one line per scan, legend
 = acquisition year) for all 16 test patients the primary ensemble gets wrong
 before referral. Grey band: patient-level referral band; titles: group,
 patient p(AD) and decision.*
 
 ![Three slices per confident failure](figures/adni/failure_multislice.png)
 
-*Figure 9c. First, middle and last of the 20 slices of the scan behind each of
-the five confident errors in Figure 9 (same order as Cases 1-5), with slice
+*Figure 13. First, middle and last of the 20 slices of the scan behind each of
+the five confident errors in Figure 10 (same order as Cases 1-5), with slice
 p(AD). IDs removed.*
 
 Per-case notes (numbers from `test_patient_predictions.csv`; τ = 0.6256):
@@ -1236,36 +1243,37 @@ Per-case notes (numbers from `test_patient_predictions.csv`; τ = 0.6256):
 
 ## Artificial Intelligence Usage Disclosure
 
-AI coding assistants (OpenAI ChatGPT/Codex and Anthropic Claude) were used as
-programming, debugging, plotting and language-polishing utilities during
-development, in accordance with course policy.
+AI coding assistants (OpenAI ChatGPT/Codex, Anthropic Claude, and Google
+Antigravity) were used as programming, debugging, analysis-scripting, plotting
+and documentation-editing utilities during development, in accordance with
+course policy.
 
 **Scope of AI assistance.**
 
-* *Boilerplate and tooling:* Assisting with CLI argument parsing, configuration
-  serialisation, Slurm batch-script templates, and Matplotlib figure formatting
-  (`figures/*.png`).
-* *Testing and refactoring:* Generating synthetic-data unit test scaffolding
-  under `tests/` and assisting with modularising the codebase into the package
-  layout behind `modules.py`, `dataset.py`, `train.py` and `predict.py`.
-* *Documentation polish:* Proofreading English grammar and formatting Markdown
-  tables from the saved `metrics.json` and summary files.
+* *Code and evaluation scripts:* Assisting with implementation scaffolding, CLI
+  and configuration modules, Slurm batch scripts, post-hoc evaluation and
+  plotting scripts (`figures/*.png`), synthetic-data unit tests under `tests/`,
+  and refactoring the codebase into the package layout behind `modules.py`,
+  `dataset.py`, `train.py` and `predict.py`.
+* *Documentation and editing:* Formatting Markdown tables from the saved
+  `metrics.json` and summary files, and assisting with drafting and polishing
+  sections of `README.md` and `docs/`.
 
 **Author's work and engineering decisions.**
 
-* Problem formulation, selection of the ConvNeXt-Tiny and SmallCNN architectures,
-  and design of the three-slice 2.5D input representation.
+* Choosing the project, the ConvNeXt-Tiny and SmallCNN architectures, the
+  three-slice 2.5D input representation, and the operational acceptance
+  criteria, and presenting the feasibility review at the 14 October tutor
+  check-off.
 * Identifying the 216-patient overlap in the course's default directories and
   establishing the frozen patient-level split (`development`, `calibration`,
   `test`).
 * Designing the experimental progression (six pre-declared rounds plus the
   post-hoc control), discovering the 2011-2016 vs 2017-2021 acquisition-period
   confound in `meta_data_with_label.json`, and formulating the non-diagnostic
-  scanner/period probe, Grad-CAM attribution check, five-fold logit ensemble and
-  Platt-calibrated referral rule.
-* Running all training, calibration and evaluation jobs on the Rangpur A100
-  cluster, and writing the feasibility review, Grad-CAM interpretation, failure
-  case autopsy and project-manager recommendation.
+  scanner/period probe, Grad-CAM attribution check, five-fold logit ensemble,
+  Platt-calibrated referral rule, failure-case analysis and project-manager
+  recommendation.
 
 **Verification.** Every piece of code was reviewed and executed against the
 synthetic test suite (`python3 -m unittest discover -s tests`) and checked for
@@ -1273,10 +1281,14 @@ zero patient leakage (`adni_splits.py verify`) before use. Every trained
 checkpoint was reloaded and verified to reproduce its own validation metrics
 (`replay_check.json`), uncalibrated and calibrated ECE values were cross-checked
 directly from raw logits, and every number in this report was verified against
-the corresponding `metrics.json` output. Initial AI suggestions that contained
-errors—such as assuming a fixed number of slices per patient, describing the
-slices as axial rather than sagittal, or clipping figure labels—were identified
-during code and visual review and corrected.
+the corresponding `metrics.json` or analysis output. Several AI errors were
+caught and corrected during review—including assuming a fixed number of slices
+per patient, calling the sagittal slices axial, describing scan probabilities as
+averaged logits rather than averaged calibrated probabilities, a miscounted
+referral breakdown, a borderline-case margin misquoted by a factor of six,
+over-specific anatomical claims on unregistered 2D slices, and a pretrained
+training command missing its `--lr 5e-5` flag. I take full responsibility for
+every line of code, metric and claim in this submission.
 
 ## Data acknowledgement and references
 
