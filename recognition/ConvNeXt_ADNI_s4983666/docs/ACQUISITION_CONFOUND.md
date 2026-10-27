@@ -217,3 +217,8 @@ Anatomical and spatial interpretation of the maps (`gradcam_group_means.png` and
 Scripts used for the tables: `probe_acquisition.py` and the per-scan
 predictions in each run's `val_scan_predictions.csv`; acquisition year and
 sequence were parsed from the metadata `raw` paths.
+
+## References
+
+* R. Geirhos et al., "Shortcut learning in deep neural networks", Nature Machine Intelligence, 2020 [8].
+* J. R. Zech et al., "Variable generalization performance of a deep learning model to detect pneumonia in chest radiographs: a cross-sectional study", PLOS Medicine, 2018 [9].

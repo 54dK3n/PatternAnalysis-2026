@@ -79,3 +79,37 @@ sequence, which can be read from the metadata file names, are strongly
 associated with the diagnosis in this data (every NC scan was acquired
 2017-2021; every scan acquired 2011-2016 is AD); see
 [ACQUISITION_CONFOUND.md](ACQUISITION_CONFOUND.md).
+
+## Manifest verification (2026-10-26 re-check)
+
+An independent re-check of the frozen manifests (2026-10-26) found the
+following:
+
+* No patient ID, scan ID, file hash or decoded-pixel hash is shared between
+  development, calibration and test.
+* No patient appears in the validation set of two folds, and no fold's
+  training or inner-early-stop patients appear in its own validation set.
+* All 30,520 slices have distinct pixel hashes, so no image is duplicated
+  under another patient.
+* No patient has more than one label.
+
+These checks have limits:
+
+* Hashes detect exact copies only, not near-duplicates.
+* The skull stripping and slice extraction were done upstream by the course
+  and cannot be audited.
+
+## Scanner-style augmentation profile
+
+The `scanner` profile (screened in Round 4 and used in the post-hoc SmallCNN
+control) is selected *instead of* `strong`, not stacked on top of it, but it
+keeps every `strong` operation (same flip, crop, rotation and translation) and
+changes or adds the following, applied in this order to each training image:
+intensity gain widened from ±10% to ±20% and gamma from ±15% to ±30%; a smooth
+multiplicative bias field (a random 4×4 grid of factors drawn from [0.7, 1],
+bicubically upsampled to the image; applied to every image); with probability
+0.3 an unsharp mask (radius 1 px, strength 50-150%), otherwise a Gaussian blur
+with radius drawn from [0, 1] px; and zero-mean Gaussian noise added inside the
+head only (standard deviation drawn from [0, 3%] of the intensity range; applied
+to every image). The black background stays zero and all three context channels
+receive the same draw (`adni_data/augmentation.py`).

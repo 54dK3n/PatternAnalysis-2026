@@ -26,6 +26,41 @@ SmallCNN five-fold cross-validation, mean outer-validation slice accuracy over
 the five folds: 0.735 (seed 3710), 0.753 (seed 4710), 0.735 (seed 5710); mean
 scan accuracy 0.771, 0.774, 0.763.
 
+
+### Earlier development screens (fold 1)
+
+Development results before the current recipe (from `metrics.json`; full table
+below), fold-1 outer validation, 95 patients:
+
+| Model | Augmentation | Slice accuracy | Scan accuracy | Slice AUROC |
+|---|---|---:|---:|---:|
+| SmallCNN | none | 0.809 | 0.834 | 0.882 |
+| ConvNeXt-Tiny | none | 0.634 | 0.668 | 0.693 |
+| ConvNeXt-Tiny | light | 0.726 | 0.768 | 0.801 |
+
+First run of the current recipe (`config/experiments_strong_aug.json`, two seeds,
+same 95 patients, checkpoint chosen on the 38-patient inner `early_stop`
+subset): ConvNeXt-Lite with three-slice context reached slice accuracy
+0.717 / 0.740 and scan accuracy 0.754 / 0.810; details below. Slice accuracy is still below 0.80.
+
+Second fold-1 screen (`config/experiments_round2.json`, 80 epochs, mean ± sd
+over two seeds, same 95 patients):
+
+| Model | Slice accuracy | Scan accuracy | Patient accuracy | Slice AUROC |
+|---|---:|---:|---:|---:|
+| SmallCNN, three-slice context | 0.735 ± 0.008 | 0.791 ± 0.020 | 0.779 ± 0.030 | 0.841 ± 0.048 |
+| ConvNeXt-Lite, single slice | 0.714 ± 0.004 | 0.780 ± 0.010 | 0.753 ± 0.007 | 0.783 ± 0.004 |
+| ConvNeXt-Lite, three-slice context | 0.728 ± 0.019 | 0.780 ± 0.030 | 0.742 ± 0.022 | 0.799 ± 0.022 |
+| ConvNeXt-Tiny, three-slice context | 0.742 ± 0.001 | 0.799 ± 0.023 | 0.768 ± 0.030 | 0.812 ± 0.008 |
+
+The scratch ConvNeXt memorised the training slices within a few epochs
+(training accuracy 1.00) and optimizer/regularisation tweaks (including mixup [3])
+stayed within seed noise; augmentation was the only clear improvement. Because the 38-patient
+`early_stop` subset proved noisy as a checkpoint selector (scan AUROC 0.64-0.73
+vs 0.84-0.87 on outer validation), subsequent rounds merged `early_stop` into
+training and kept the final-epoch EMA weights.
+
+
 ## Inner early-stop screens (fold 1)
 
 | Setting (two seeds where listed) | Slice acc. | Patient acc. | Train acc. at end |
@@ -121,7 +156,7 @@ checkpoints replayed exactly). Each fold is scored on its own validation
 patients (95-96), so the five folds cover all 476 development patients.
 
 | Fold | Slice acc. (ConvNeXt / CNN) | Scan acc. | Patient acc. | Slice AUROC | Final train acc. |
-|---:|---|---|---|---|---|
+|---:|---|---|---|---|---|---|
 | 1 | 0.739 / 0.665 | 0.815 / 0.630 | 0.789 / 0.737 | 0.818 / 0.850 | 0.954 / 0.878 |
 | 2 | 0.708 / 0.671 | 0.765 / 0.685 | 0.832 / 0.747 | 0.760 / 0.725 | 0.961 / 0.873 |
 | 3 | 0.693 / 0.716 | 0.721 / 0.699 | 0.768 / 0.789 | 0.788 / 0.867 | 0.949 / 0.885 |
@@ -135,6 +170,19 @@ patients (95-96), so the five folds cover all 476 development patients.
   AUROC differences are within ±0.011.
 * Patient errors over all folds: ConvNeXt 45 false positives / 59 false
   negatives, CNN 29 / 90. Same ranking ability, different operating point.
+
+Per fold (ConvNeXt / CNN accuracy):
+
+| Fold | Slice | Scan | Patient | Patient FP / FN (ConvNeXt; CNN) |
+|---:|---|---|---|---|
+| 1 | 0.739 / 0.665 | 0.815 / 0.630 | 0.789 / 0.737 | 11 / 9; 0 / 25 |
+| 2 | 0.708 / 0.671 | 0.765 / 0.685 | 0.832 / 0.747 | 3 / 13; 6 / 18 |
+| 3 | 0.693 / 0.716 | 0.721 / 0.699 | 0.768 / 0.789 | 12 / 10; 2 / 18 |
+| 4 | 0.749 / 0.733 | 0.767 / 0.781 | 0.771 / 0.771 | 13 / 9; 5 / 17 |
+| 5 | 0.685 / 0.664 | 0.672 / 0.708 | 0.747 / 0.705 | 6 / 18; 16 / 12 |
+
+
+
 * Fold 1 slice accuracy (0.739) matches the round-2 Tiny runs (0.742 / 0.741),
   so merging the early-stop patients into training and keeping the final epoch
   neither helped nor hurt there.
@@ -149,6 +197,38 @@ patients (95-96), so the five folds cover all 476 development patients.
   0.654 (CNN) instead of 0.850 and 0.839.
 
 ## Rounds 4 and 5: scanner-style augmentation and ImageNet initialisation (folds 4 and 5)
+
+
+
+Two attempts to weaken the acquisition shortcut were screened on folds 4 and 5
+(one seed each; details below).
+Validation accuracy slice / scan / patient, and scan AUROC on the 2017-2021
+validation scans:
+
+| Run | Fold 4 | Fold 5 | 2017-21 scan AUROC (f4, f5) |
+|---|---|---|---|
+| ConvNeXt-Tiny scratch, strong aug. (round 3) | 0.749 / 0.767 / 0.771 | 0.685 / 0.672 / 0.747 | 0.818, 0.696 |
+| SmallCNN, strong aug. (round 3) | 0.733 / 0.781 / 0.771 | 0.664 / 0.708 / 0.705 | 0.718, 0.560 |
+| ConvNeXt-Tiny scratch, scanner aug. | 0.738 / 0.763 / 0.729 | 0.720 / 0.774 / 0.789 | 0.779, 0.725 |
+| SmallCNN, scanner aug. | 0.758 / 0.828 / 0.823 | 0.756 / 0.764 / 0.768 | 0.752, 0.710 |
+| ConvNeXt-Tiny ImageNet-1k, strong aug. | 0.817 / 0.847 / 0.844 | 0.773 / 0.774 / 0.821 | 0.770, 0.740 |
+| ConvNeXt-Tiny ImageNet-1k, scanner aug. | 0.801 / 0.814 / 0.802 | 0.773 / 0.785 / 0.789 | 0.745, 0.719 |
+
+* ImageNet initialisation (cited weights, 40 epochs) gives the best overall
+  accuracy so far, but discrimination within 2017-2021 stays at the level of
+  the scratch model: the gain comes mostly from scans whose acquisition style
+  already identifies the class.
+* Scanner-style augmentation helps the CNN on plain accuracy and 2017-2021 scan
+  AUROC (though on fold 5 it misses 26/26 `2017-2021 AD` scans, reducing fold-5
+  2017-2021 scan balanced accuracy to 0.452), is mixed for scratch ConvNeXt and
+  adds nothing to the pretrained model. We retained `strong` augmentation across
+  all three pre-declared five-fold ensembles so they share the same split,
+  augmentation and evaluation pipeline (learning rate, epochs and weight decay
+  still differ, so this is not a single-variable comparison), and later ran a post-hoc five-fold `SmallCNN + scanner aug.`
+  control after the locked test run (see *Post-hoc control: SmallCNN with
+  scanner augmentation* below).
+
+
 
 Two attempts to weaken the acquisition shortcut, screened on folds 4 and 5
 (fold 5 was the weakest fold and has the most 2017-2021 AD validation scans).
@@ -214,13 +294,13 @@ and 5 reproduce the round-5 numbers exactly.
 | 5 | 0.773 | 0.774 | 0.821 | 0.900 | 4 / 13 | 0.740 | 22/26 |
 | mean ± sd | 0.798 ± 0.028 | 0.828 ± 0.039 | 0.840 ± 0.019 | 0.920 ± 0.014 | 24 / 52 total | 0.778 ± 0.047 | 63/86 |
 
-Paired over the five folds (mean difference, paired t with 4 degrees of
-freedom; 2.78 is the 5% two-sided critical value):
+Paired differences across the five folds (paired t, 4 df; 2.78 = 5% two-sided threshold):
 
 | Comparison | Slice acc. | Scan acc. | Patient acc. | 2017-21 scan AUROC |
 |---|---|---|---|---|
 | pretrained - scratch ConvNeXt-Tiny | +0.083 (t = 14.3) | +0.080 (t = 6.4) | +0.059 (t = 3.4) | +0.042 (t = 1.5) |
 | pretrained - SmallCNN | +0.108 (t = 6.1) | +0.128 (t = 3.9) | +0.090 (t = 7.1) | +0.172 (t = 5.1) |
+| scratch ConvNeXt-Tiny - SmallCNN | +0.025 (t = 1.6) | +0.047 (t = 1.2) | +0.032 (t = 1.7) | +0.130 (t = 5.4) |
 
 Out-of-fold scan error by acquisition group (all 1,050 development scans):
 
@@ -240,6 +320,34 @@ Out-of-fold scan error by acquisition group (all 1,050 development scans):
   not significant (+0.042, t = 1.5). It separates those scans better than the
   Round-3 `strong`-augmented CNN (+0.172, t = 5.1).
 * Training accuracy reaches 1.00; one seed per fold.
+
+### Why the folds differ
+
+**Why the folds differ.** Per-fold slice / scan / patient accuracy of the
+pretrained model, and the number of 2017-2021 AD scans in each validation fold:
+
+| Fold | Slice acc. | Scan acc. | Patient acc. | 2017-21 AD scans in fold (missed) |
+|---:|---:|---:|---:|---:|
+| 1 | 0.836 | 0.877 | 0.863 | 10 (7) |
+| 2 | 0.778 | 0.810 | 0.821 | 17 (15) |
+| 3 | 0.783 | 0.834 | 0.853 | 9 (5) |
+| 4 | 0.817 | 0.847 | 0.844 | 24 (14) |
+| 5 | 0.773 | 0.774 | 0.821 | 26 (22) |
+
+Fold-to-fold variance stems from (1) ~95 validation patients per fold (±0.04
+sampling error), (2) an uneven share of the hard 2017-2021 AD group (9 to 26
+scans per fold), and (3) seed-to-seed training variance: in Round 2 (two seeds
+on fold 1 for the scratch model), slice-level seed sd was tiny (0.001) but scan
+(0.023) and patient (0.030) seed sd were comparable to across-fold patient sd
+(0.019-0.032) because a few borderline patients flipping across the 0.5
+threshold move patient accuracy by ~1 pp each (the five-fold comparisons use one
+deterministic seed `3710 + fold` per fold). Pooled out-of-fold metrics across
+all 476 development patients (`pooled_out_of_fold_round3_round6.json`) match the
+fold means: pretrained ConvNeXt-Tiny `0.798` slice / `0.830` scan / `0.840`
+patient accuracy, scratch ConvNeXt-Tiny `0.715 / 0.749 / 0.782`, and SmallCNN
+`0.691 / 0.701 / 0.750`.
+
+
 
 ## Round 7 (post-hoc control): five-fold SmallCNN with scanner augmentation
 
