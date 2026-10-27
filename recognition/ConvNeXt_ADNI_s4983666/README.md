@@ -803,6 +803,55 @@ ensemble, by diagnosis, acquisition period and enrolment band (subject number
 < 6000 = enrolled before ADNI-3). Crosses: wrong before referral; grey band:
 referred.*
 
+**Other error dimensions (post-hoc, not in `PREDECLARATION.txt`).** The
+development out-of-fold predictions were also split by slice position,
+sequence family and number of scans per patient. Saved predictions were
+re-analysed only; no model, threshold or conclusion changed. Details:
+[docs/FAILURE_ANALYSIS.md](https://github.com/54dK3n/PatternAnalysis-2026/blob/topic-recognition/recognition/ConvNeXt_ADNI_s4983666/docs/FAILURE_ANALYSIS.md#4-error-breakdown-by-slice-position-sequence-family-and-scans-per-patient-post-hoc).
+
+* **Slice position does not explain the errors.** The 20 slices of a scan form
+  a narrow band (head area varies by about 1% across positions). The central and
+  outer 10 slices are classified about equally well (pretrained: 0.792 vs
+  0.804, p = 0.17). AD scans acquired 2017-2021 are poorly classified at every
+  position (0.22-0.41, against 0.72-0.86 for 2011-2016 AD scans), so their
+  errors are scan-wide.
+* **Within one period and one diagnosis, the sequence family matters.**
+  2011-2016 AD scans from Siemens/other sequences, the family used by 438 of
+  the 547 development NC scans, are missed more often than those from GE or
+  Philips sequences. NC scans from GE sequences are called AD more often than
+  NC scans from Siemens/other sequences. Scans whose sequence family is typical
+  of the other class are therefore misclassified more often. The AD
+  difference holds within each acquisition year and does not come from one
+  site. For the scratch ConvNeXt and SmallCNN it also holds when each patient
+  or site counts once. For the primary pretrained ensemble it does not
+  (patient level p = 0.09, site level p = 0.13), so its reliance on sequence
+  family is not established. Family and site can be separated only in 10
+  sites, so site population and disease stage are not ruled out. This fits
+  the acquisition-shortcut explanation but does not prove it.
+* **The number of scans per patient is not a separate cause.** AD patients
+  with one scan look harder (pretrained: 22/42 wrong vs 19/82 with three or
+  more scans). Within acquisition period the gap disappears (2017-2021-only
+  AD: 18/26 vs 7/10), because 26 of the 47 AD patients scanned only in
+  2017-2021 have a single scan.
+
+| Development OOF scan error | Pretrained | Scratch | SmallCNN |
+|---|---|---|---|
+| AD 2011-2016, Siemens/other | 54/239 = 0.23 | 107/239 = 0.45 | 139/239 = 0.58 |
+| AD 2011-2016, GE or Philips | 18/178 = 0.10 | 18/178 = 0.10 | 49/178 = 0.28 |
+| NC, GE | 15/109 = 0.14 | 22/109 = 0.20 | 23/109 = 0.21 |
+| NC, Siemens/other | 29/438 = 0.07 | 59/438 = 0.13 | 31/438 = 0.07 |
+
+The Fisher p-values for the AD rows are 0.001, 2 × 10⁻¹⁵ and 5 × 10⁻¹⁰. For
+the NC rows they are 0.019, 0.096 and 5 × 10⁻⁵. They are optimistic because
+the counts are per scan and scans of one patient are not independent. On test,
+the AD direction repeats (6/61 vs 0/61) but the NC direction does not (GE 1/28
+vs Siemens/other 13/129).
+
+![Scan error by sequence family](figures/adni/error_by_sequence_family.png)
+
+*Figure 12. Development out-of-fold scan error rate by diagnosis, acquisition
+period and sequence family for the three models.*
+
 **What the images can and cannot show.** *Figure 10* displays the single most confident erroneous slice per patient rather than a representative slice. In 98 of the 306 test scans (32%), some slices fall on each side of 0.5 (median within-scan range 0.22). Longitudinal slice-by-slice probability trajectories across whole scans and multi-slice anatomical profiles are documented in [docs/FAILURE_ANALYSIS.md](https://github.com/54dK3n/PatternAnalysis-2026/blob/topic-recognition/recognition/ConvNeXt_ADNI_s4983666/docs/FAILURE_ANALYSIS.md#2-through-scan-slice-profiles-and-multislice-analysis). No ventricle or cortical measurements were made, so no anatomical inferences are drawn from these images.
 
 Per-case notes (numbers from `test_patient_predictions.csv`; τ = 0.6256):
