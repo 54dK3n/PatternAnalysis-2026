@@ -826,8 +826,13 @@ re-analysed only; no model, threshold or conclusion changed. Details:
   or site counts once. For the primary pretrained ensemble it does not
   (patient level p = 0.09, site level p = 0.13), so its reliance on sequence
   family is not established. Family and site can be separated only in 10
-  sites, so site population and disease stage are not ruled out. This fits
-  the acquisition-shortcut explanation but does not prove it.
+  sites, so site population and disease stage are not ruled out. A
+  pre-declared intervention changed only each scan's intensity distribution
+  to that of the other family. It moved scan p(AD) by at most 0.02, in no
+  consistent direction, and none of the three models met the pre-declared
+  criterion. Overall brightness and contrast are therefore not the route. The
+  errors may come from style cues not changed here (noise, sharpness) or from
+  site differences, and the data cannot separate the two.
 * **The number of scans per patient is not a separate cause.** AD patients
   with one scan look harder (pretrained: 22/42 wrong vs 19/82 with three or
   more scans). Within acquisition period the gap disappears (2017-2021-only

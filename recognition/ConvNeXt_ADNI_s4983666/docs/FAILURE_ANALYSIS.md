@@ -239,11 +239,70 @@ In summary, for the scratch ConvNeXt and SmallCNN the errors follow the
 sequence family beyond acquisition year, any single site and repeated scans.
 This supports, but does not prove, that these models use acquisition style.
 For the primary pretrained ensemble the evidence is weak. None of these checks
-is causal. A direct test of whether a model relies on style would intervene on
-the input: for example, match a scan's intensity histogram to the other
-family, keep the anatomy, and measure the change in p(AD). This was not run.
+is causal; section 4.4 intervenes on the input.
 
-### 4.4 Scans per patient
+### 4.4 Intervention: changing only the intensity style
+
+This is a post-hoc experiment, declared in advance in
+`results/style_intervention_20261027/PLAN.md` (written 2026-10-27 before the
+job ran; Slurm 704381; stored outside Git). It used development out-of-fold
+scans only, and no model was trained. Each validation scan was scored by its
+fold model under three conditions:
+
+* `original`: the scan as acquired;
+* `same`: foreground intensities (pixels > 16) histogram-matched to the mean
+  intensity distribution of the scan's own family;
+* `cross`: foreground intensities matched to the other family.
+
+Each reference came from up to 60 training scans of the same fold with the
+same diagnosis and period, so anatomy and background are unchanged. The
+effect is `p(cross) - p(same)`, which removes the effect of matching itself.
+The `original` condition reproduced the saved validation logits on all 55,020
+slices (largest difference 0.005, floating-point precision).
+
+| Mean change in scan p(AD) [95% patient-bootstrap CI] | Expected | Pretrained ConvNeXt-Tiny | Scratch ConvNeXt-Tiny | SmallCNN |
+|---|:-:|---|---|---|
+| AD 2011-2016, Siemens/other → GE style (239 scans) | + | −0.013 [−0.021, −0.007] | −0.004 [−0.008, +0.001] | +0.001 [−0.008, +0.009] |
+| AD 2011-2016, GE → Siemens/other style (131 scans) | − | +0.007 [+0.000, +0.014] | −0.002 [−0.006, +0.002] | +0.004 [−0.007, +0.015] |
+| NC, GE → Siemens/other style (109 scans) | − | +0.009 [+0.002, +0.017] | +0.010 [−0.000, +0.021] | +0.020 [+0.009, +0.032] |
+| NC, Siemens/other → GE style (438 scans) | + | +0.005 [+0.002, +0.009] | +0.021 [+0.015, +0.027] | +0.019 [+0.014, +0.024] |
+| Directions supported / significantly opposite | | 1 / 3 | 1 / 0 | 1 / 1 |
+
+* By the pre-declared rule (at least 2 of 4 directions supported and none
+  significantly opposite), **none of the three models responds to the
+  intensity style**.
+* The changes are small: at most 0.021 in mean scan p(AD), with at most 12
+  decisions at 0.5 flipping in any group. In comparison, the error rates of
+  the two families differ by 0.07-0.35 (section 4.2).
+* The changes do not follow the family-class association. NC scans gain p(AD)
+  whichever family's style they receive. The only direction supported for all
+  three models (NC Siemens/other → GE) is therefore not specific.
+* Overall brightness and contrast are thus not how the family-related errors
+  arise. Two explanations remain:
+  * the models use style cues this experiment left unchanged (noise texture,
+    sharpness, artefacts), which the vendor probe shows are recognisable from
+    pixels;
+  * the association comes from differences between the patients of different
+    sites.
+
+  The available data cannot separate them.
+* Limits: the change in style is mild. The two families' intensity
+  distributions are already similar in the supplied JPEGs, and the example
+  below is hard to tell apart by eye. A null result for this intervention
+  therefore does not mean that the models ignore acquisition style.
+
+![Intensity-style intervention](../figures/adni/style_intervention.png)
+
+*Supplementary Figure 5. Mean change in scan p(AD) when a scan's intensity
+distribution is matched to the other sequence family instead of its own (95%
+patient-bootstrap CI), for the four pre-declared directions and three models.*
+
+![Example of the intervention](../figures/adni/style_intervention_example.png)
+
+*Supplementary Figure 6. Middle slice of one 2011-2016 AD Siemens/other scan:
+original, matched to its own family, and matched to the GE family. IDs removed.*
+
+### 4.5 Scans per patient
 
 AD patients with a single scan look harder at first: the pretrained models miss
 22 of 42 such patients, against 19 of 82 with three or more scans. Split by
