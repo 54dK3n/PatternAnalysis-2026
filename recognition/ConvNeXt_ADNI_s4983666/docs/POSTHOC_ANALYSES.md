@@ -50,7 +50,8 @@ Three findings emerge from this patient-level calibration control:
    ConvNeXt, `0.078 -> 0.057` for `scanner` SmallCNN, and **`0.112 -> 0.038`**
    for `strong` SmallCNN). This supports the reading that `strong` SmallCNN's
    elevated post-Platt patient ECE (`0.112`) came from applying slice-fitted
-   Platt parameters (`b = +0.813`) to patient averages rather than from an
+   Platt parameters (`b = +0.813`) to slice logits before averaging the
+   calibrated probabilities per patient, rather than from an
    inability of `SmallCNN` to produce calibrated patient probabilities.
 2. **Better-calibrated confidence does not mean fewer missed AD patients:**
    Matching the lower patient AD prior moves every ensemble's decision boundary

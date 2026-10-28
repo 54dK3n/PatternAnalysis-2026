@@ -268,17 +268,21 @@ slices (largest difference 0.005, floating-point precision).
 | NC, Siemens/other → GE style (438 scans) | + | +0.005 [+0.002, +0.009] | +0.021 [+0.015, +0.027] | +0.019 [+0.014, +0.024] |
 | Directions supported / significantly opposite | | 1 / 3 | 1 / 0 | 1 / 1 |
 
-* By the pre-declared rule (at least 2 of 4 directions supported and none
-  significantly opposite), **none of the three models responds to the
-  intensity style**.
+* **None of the three models met the pre-declared directional criterion** (at
+  least 2 of 4 directions supported and none significantly opposite). Some
+  changes do differ from zero, for example +0.021 [+0.015, +0.027] for scratch
+  ConvNeXt on NC Siemens/other → GE. They do not, however, follow the pattern
+  that the criterion requires.
 * The changes are small: at most 0.021 in mean scan p(AD), with at most 12
   decisions at 0.5 flipping in any group. In comparison, the error rates of
   the two families differ by 0.07-0.35 (section 4.2).
 * The changes do not follow the family-class association. NC scans gain p(AD)
   whichever family's style they receive. The only direction supported for all
   three models (NC Siemens/other → GE) is therefore not specific.
-* Overall brightness and contrast are thus not how the family-related errors
-  arise. Two explanations remain:
+* This histogram-matching intervention therefore did not support an
+  intensity-mediated mechanism for the family-related errors. Because the
+  intervention was mild, it does not rule out all brightness or contrast
+  effects. Two other explanations also remain:
   * the models use style cues this experiment left unchanged (noise texture,
     sharpness, artefacts), which the vendor probe shows are recognisable from
     pixels;

@@ -191,6 +191,197 @@ Anatomical and spatial interpretation of the maps (`gradcam_group_means.png` and
   boundaries—the superior frontoparietal cortical rim, occipital/cerebellar
   contour and brainstem edge.
 
+## Post-hoc checks: distribution shift, PCA, feature probes and a morphology proxy
+
+Five post-hoc checks, run on 2026-10-28 after the locked test evaluation, ask
+where the acquisition signal lives, whether the trained models use it, and
+what else they might read. Each plan, including its reading criteria, was
+written and hashed before the data were read (`results/<check>/PLAN.md`; Slurm
+706974, 707090, 707307 and 707297). No backbone was trained or re-scored on
+held-out data; test images entered only the first check, without their
+labels.
+
+### Development, calibration and test share one pixel distribution
+
+Nine per-scan statistics (foreground mean, SD, 5th/50th/95th percentiles,
+foreground fraction, head centroid row and column, whole-image mean; foreground
+= pixels > 16, all 20 slices) were fed to a logistic-regression domain
+classifier with patient-grouped five-fold cross-validation:
+
+| Separating | Scan AUROC [95% CI] |
+|---|---|
+| Development vs test | 0.497 [0.437, 0.553] |
+| Development vs calibration | 0.491 [0.411, 0.570] |
+| Positive control: AD 2011-2016 vs 2017-2021 (development) | 0.73 [0.633, 0.818] |
+| Positive control: NC GE vs Siemens/other (development) | 0.886 [0.845, 0.922] |
+
+* The same statistics separate acquisition period and vendor inside the
+  development set but cannot tell development from test or calibration scans.
+  The largest single differences are small: test foreground mean, SMD 0.152;
+  calibration head centroid row, SMD -0.284.
+* The test set therefore carries the same internal confound as development
+  and no additional shift. A new site or scanner, where acquisition does not
+  predict diagnosis, is the shift that matters for deployment.
+
+![Foreground intensity histograms](../figures/adni/shift_histograms.png)
+
+*Supplementary Figure 7. Mean foreground intensity histogram by partition
+(left; test labels not used) and by development diagnosis and acquisition
+period (right).*
+
+### Leading principal components are head position and brightness
+
+PCA (50 components) of the middle slice of the 1,050 development scans
+(downsampled to 64 x 60):
+
+| Component | Variance | Strongest Spearman correlation | AUROC: GE vs Siemens/other (NC) | AUROC: diagnosis within 2017-2021 |
+|---|---|---|---|---|
+| PC1 | 23.0% | head centroid column, -0.969 | 0.661 | 0.597 |
+| PC2 | 9.2% | whole-image mean, 0.587 | 0.282 | 0.484 |
+| PC3 | 8.7% | head centroid row, 0.828 | 0.365 | 0.412 |
+
+* PC2 separates vendor (AUROC 0.282, i.e. 0.718 in the other direction) but
+  not diagnosis within 2017-2021 (pre-declared reading C1 met).
+* A PCA + logistic-regression control on the project folds shows how far
+  removing leading components goes. Dropping the top 10 components lowers the
+  vendor probe from 0.781 to 0.596, but it stays above chance and the diagnosis
+  AUROC also falls (-0.038 [-0.067, -0.008]). Dropping only the components
+  flagged as nuisance lowers the vendor probe by 0.05 (reading C2 not met).
+  The vendor signal is spread over many small components.
+* The linear control carries little diagnosis signal (2017-2021 AUROC 0.531
+  [0.433, 0.627]), so it cannot show how much disease signal a filtered input
+  would keep.
+
+![Principal components](../figures/adni/pca_components.png)
+
+*Supplementary Figure 8. Mean middle slice and the first eight principal
+components (red brighter, blue darker) with their share of variance.*
+
+### The pretrained ConvNeXt encodes acquisition but does not decide by it
+
+Each fold model (unchanged weights) was run on its training and validation
+scans; the scan feature is the mean input of the final linear layer (768-d for
+ConvNeXt, 128-d for SmallCNN). Logistic-regression probes fitted on training
+scans predicted vendor (GE vs Siemens/other within NC) and period (2017-2021 vs
+2011-2016 within AD) on the out-of-fold scans. The probe directions were then
+removed iteratively (one vendor and one period direction per iteration, 10
+iterations) and the unchanged head re-scored the projected features.
+Recomputed slice logits matched the saved predictions (max absolute
+difference 2.1e-4, 2.5e-5 and 0.005).
+
+| Model | Vendor probe, before -> after | Period probe, before -> after | Diagnosis AUROC, all scans | Diagnosis AUROC, 2017-2021 |
+|---|---|---|---|---|
+| Pretrained ConvNeXt (primary) | 0.95 -> 0.473 | 0.914 -> 0.573 | 0.924 -> 0.918 | 0.775 -> 0.759 |
+| Scratch ConvNeXt | 0.91 -> 0.676 | 0.785 -> 0.724 | 0.852 -> 0.840 | 0.725 -> 0.704 |
+| SmallCNN | 0.983 -> 0.508 | 0.955 -> 0.541 | 0.836 -> 0.496 | 0.652 -> 0.604 |
+
+(Diagnosis AUROC here uses the scan's mean slice logit.)
+
+* **Pretrained ConvNeXt.** Its features encode vendor and period strongly
+  (reading P1 met), and ten iterations remove what a linear probe can find
+  (P2 met). The unchanged head then loses almost nothing: all-scan AUROC
+  changes by -0.005 [-0.010, 0.000] (P3 not met). Because the head is linear,
+  it cannot use the removed directions, so its decisions do not rest on them.
+* **SmallCNN.** Removing two iterations (four directions) drops all-scan AUROC
+  from 0.836 to 0.674 while 2017-2021 AUROC stays at 0.672; after five
+  iterations all-scan AUROC is 0.486. Its discrimination on the confounded
+  part of the data runs almost entirely through acquisition directions, and
+  its within-period discrimination is the weaker signal left.
+* **Scratch ConvNeXt** lies in between (-0.012 [-0.019, -0.006]), and its
+  vendor signal is not fully removed by ten iterations.
+* This ordering matches the error breakdown, where errors follow the sequence
+  family robustly for the scratch ConvNeXt and SmallCNN but not significantly
+  for the pretrained ensemble ([FAILURE_ANALYSIS.md](FAILURE_ANALYSIS.md)).
+* Limits: the random-direction control is weak, because random directions are
+  nearly orthogonal to the head (control range about +/-0.0003); the period
+  label may also carry disease stage, as 2017-2021 AD patients are mostly newer
+  ADNI-3 enrolments; the test applies to the final layer of the existing
+  models and does not show what a model trained on de-confounded inputs would
+  learn. The pretrained model's misses on 2017-2021 AD scans are therefore
+  not explained by these acquisition directions.
+
+![Frozen-feature probes](../figures/adni/feature_probe.png)
+
+*Supplementary Figure 9. Out-of-fold scan AUROC of the vendor and period
+probes and of the unchanged head (all scans, 2017-2021 scans) as acquisition
+directions are removed; shaded band: random directions.*
+
+### A retrained head gains nothing from removing acquisition directions
+
+A frozen head cannot show whether the disease information that remains after
+projection would be usable by a head trained without the acquisition
+directions. A pre-declared check (`results/head_retrain_20261028/PLAN.md`,
+Slurm 707307) therefore fitted new logistic-regression heads (C = 1, fixed) on
+the frozen features of each fold's out-of-fold validation scans. To keep every
+score blind, each fold's validation patients were split into five inner
+patient-grouped folds, and each inner fold was scored by a head fitted on the
+other four; the projection used the directions estimated on the fold's
+training scans, as above. The resulting AUROCs are cross-validated estimates
+for new heads trained on about 170 scans per fold, comparable with each other
+but not with the frozen head. Calibration and test data were not read.
+
+| New head (nested out-of-fold) | Pretrained, all scans | Pretrained, 2017-2021 | SmallCNN, all scans | SmallCNN, 2017-2021 |
+|---|---|---|---|---|
+| (a) original features | 0.897 | 0.748 | 0.861 | 0.658 |
+| (b) acquisition directions removed | 0.894 | 0.756 | 0.665 | 0.533 |
+| (b) - (a), 2017-2021 [95% CI] | | +0.008 [-0.024, 0.040] | | -0.124 [-0.199, -0.043] |
+| (c) original features, fitted on 2017-2021 scans only | 0.83 | 0.75 | 0.625 | 0.687 |
+| (d) directions removed, 2017-2021 scans only | 0.814 | 0.748 | 0.543 | 0.613 |
+| (d) - (c), 2017-2021 [95% CI] | | -0.002 [-0.028, 0.025] | | -0.074 [-0.138, -0.009] |
+
+* **Pretrained ConvNeXt.** Neither pre-declared reading is met (H1, H2). A head
+  trained without the acquisition directions separates 2017-2021 AD from NC
+  as well as one trained with them, and almost as well overall. The disease
+  information in these features lies outside the acquisition directions, and
+  retraining the head alone would not improve within-period discrimination.
+* **SmallCNN.** Removing the directions also costs a retrained head
+  within-period discrimination (-0.124), so in its 128-d features the
+  acquisition directions and the diagnosis information are entangled; a
+  de-confounded SmallCNN would need different features, not a new head.
+
+![Retrained heads](../figures/adni/head_retrain.png)
+
+*Supplementary Figure 10. Scan AUROC (all scans and 2017-2021 scans) of the
+frozen head and of new heads fitted within out-of-fold scans, with and without
+the acquisition directions.*
+
+### A dark-tissue proxy is too crude to test what the model reads
+
+With the acquisition directions ruled out, the remaining candidate is gross
+morphology in the central region highlighted by Grad-CAM. A pre-declared check
+(`results/atrophy_proxy_20261028/PLAN.md`, Slurm 707297) compared the saved
+out-of-fold scan p(AD) with a pixel proxy for cerebrospinal fluid. In each
+slice the head mask (pixels > 16, closed and hole-filled) was intersected with
+a central box (40% of the mask's height and width, centred on its centroid),
+and the proxy is the share of mask pixels in the box darker than 0.4 x the
+scan's median foreground intensity, pooled over the 20 slices.
+
+| Check | Result |
+|---|---|
+| Proxy AUROC, AD vs NC, 2017-2021 scans (pre-declared validity check, >= 0.60) | 0.5407 [0.4355, 0.6403] |
+| Proxy AUROC, AD vs NC, all development scans | 0.6502 [0.5926, 0.7046] |
+| Mean proxy: NC / AD 2017-2021 / AD 2011-2016 | 0.1033 / 0.1084 / 0.1378 |
+| Spearman, proxy vs pretrained p(AD), within NC | 0.2384 [0.1311, 0.3423] |
+| Spearman, proxy vs pretrained p(AD), within AD 2017-2021 | 0.1769 [-0.0774, 0.4161] |
+| Proxy, missed minus detected AD 2017-2021 (pretrained) | -0.0083 [-0.0364, 0.0168] |
+
+* The proxy separates AD from NC only across acquisition periods: it is higher
+  in 2011-2016 AD scans and similar in 2017-2021 AD and NC scans. It fails the
+  pre-declared validity check, so the correlation and miss tests are
+  inconclusive by plan, and the parameters were not tuned afterwards.
+* Descriptively, among NC scans the pretrained model's p(AD) rises with the
+  proxy (unchanged after controlling for head area, 0.2397 [0.1349, 0.3419]).
+  NC patients with subject numbers below 2000 do not have a higher proxy than
+  those at 6000 or above (difference 0.0002 [-0.0258, 0.0300]).
+* What the pretrained model relies on in the 2017-2021 scans therefore remains
+  open: these checks exclude global intensity style, head position and the
+  linearly decodable acquisition directions, but do not identify the cue.
+
+![Proxy by group](../figures/adni/proxy_by_group.png)
+
+*Supplementary Figure 11. Central dark-tissue proxy by group; 2017-2021 AD
+scans split by the pretrained model's out-of-fold call (p < 0.5 = missed).*
+
 ## Consequences
 
 * Development accuracy and AUROC overstate how well the models detect
