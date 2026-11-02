@@ -41,7 +41,7 @@ an artefact of the 16 test errors.
 
 ## 2. Through-scan slice profiles and multislice analysis
 
-**What the images can and cannot show.** *Figure 10* shows the single slice
+**What the images can and cannot show.** *Figure 5* shows the single slice
 with the most confident wrong prediction for each patient, not a
 representative slice. Two further views reduce that selection bias.
 
@@ -78,7 +78,7 @@ patient p(AD) and decision.*
 ![Three slices per confident failure](../figures/adni/failure_multislice.png)
 
 *Supplementary Figure 2. First, middle and last of the 20 slices of the scan behind each of
-the five confident errors in Figure 10 (same order as Cases 1-5), with slice
+the five confident errors in Figure 5 (same order as Cases 1-5), with slice
 p(AD). IDs removed.*
 
 
@@ -86,7 +86,9 @@ p(AD). IDs removed.*
 ## 3. Case notes for supplementary cases (Cases 6–10)
 
 * **Cases 6-9 (2017-2021, referred).** Patient p(AD) is 0.49-0.53, so all four
-  are referred. Their images were not examined for a specific cause.
+  are referred. Their images were not examined for a specific cause; their
+  acquisition and slice-probability profiles are in the README (*Case
+  profiles (post-hoc)*).
 * **Case 10 (the only misclassified 2011-2016 AD patient).** Among the 122
   2011-2016 AD test scans (28 patients), the primary ensemble misses 6 scans.
   One is a borderline scan (`p(AD) = 0.48`) from a patient who is correct at
